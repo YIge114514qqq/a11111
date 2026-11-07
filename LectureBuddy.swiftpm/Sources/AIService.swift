@@ -87,8 +87,16 @@ struct AIService {
             .map { "\($0.offset + 1). \($0.element)" }
             .joined(separator: "\n")
         let system = """
-        你是课堂同传翻译。把用户给的每一句原文翻译成\(target)。
-        规则：逐句对应，不合并、不省略、不解释，专有名词保留英文原词。
+        你是坐在学生旁边的朝鲜语/外语课堂同传。把每句原文翻译成\(target)。
+
+        翻译要求：
+        1. 说人话。像同学课后给你转述老师的话，不要书面腔、不要机翻腔。
+        2. 口语词就按口语译，按语境翻成自然的中文口头语。
+        3. 专业术语要准。学科里的固定译法要用通行译名，拿不准的保留原文并括号补中文。
+        4. 长句拆成符合中文语序的短句，但不合并、不增删信息。
+        5. 不要添加解释、不要加“老师说道”这类旁白。
+
+        格式：逐句对应，不合并、不省略。
         只输出一个 JSON 字符串数组，长度必须等于原文句数，不要输出任何其他文字。
         """
         let answer = try complete(messages: [
@@ -145,12 +153,40 @@ struct AIService {
             }
         }
         let system = """
-        你是课堂助教。只根据下面这节课的内容回答问题，找不到依据就说"这节课没讲到"。
-        先给结论，再用 2-4 句解释，必要时引用老师的原话。
+        你是留学生的课堂助教。只根据下面这节课的内容回答，找不到依据就说"这节课没讲到"。
+        回答按这个顺序组织，用中文写：
+        1. 一句话结论。
+        2. 老师原话怎么说的（引一句）。
+        3. 用大白话解释清楚。
+        4. 举一个具体例子或类比，让学生真正听懂（这一条不能省）。
+        5. 如果这是个容易混淆的难点，指出易错点。
+        语言要像学长给学妹讲题，直接、有耐心，不要堆术语。
         """
-        return try complete(messages: [
-            ChatMessage(role: "system", content: system),
-            ChatMessage(role: "user", content: "【课堂内容】\n" + String(context.prefix(24000)) + "\n\n【问题】\n" + question)
         ], temperature: 0.3)
+    }
+
+    /// 根据「今天上什么课」生成专业术语表（每行「原文=译文」）
+    func buildTermList(topic: String, sourceLang: String, targetLang: String) async throws -> String {
+        let system = """
+        你是给同声传译做准备的专业术语助手。
+        用户会告诉你今天上课的主题和授课语言。请你：
+
+        1. 先想清楚这门课/这个主题下，教授最可能反复使用的专业术语（含缩写、人名理论名、公式名、教材常见词）。
+        2. 每个术语给出 \(targetLang) 里学界通行的正式译名；没有通行译名的保留原文。
+        3. 覆盖 25-40 条，从最核心的概念往外扩，不要凑数、不要写例句。
+
+        只输出「原文=译文」，一行一条，不要编号、不要解释、不要任何多余文字。
+        原文用授课语言（\(sourceLang)）写，译文用 \(targetLang) 写。
+        """
+        let answer = try complete(messages: [
+            ChatMessage(role: "system", content: system),
+            ChatMessage(role: "user", content: "今天这节课：" + topic.trimmingCharacters(in: .whitespaces))
+        ], temperature: 0.3)
+        // 只保留 xxx=yyy，过滤模型偶尔多写的说明
+        let lines = answer.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.replacingOccurrences(of: "- ", with: "").replacingOccurrences(of: "* ", with: "") }
+            .filter { $0.contains("=") && $0.count >= 3 && $0.count <= 120 }
+        return lines.joined(separator: "\n")
     }
 }

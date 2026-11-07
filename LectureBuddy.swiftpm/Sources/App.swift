@@ -36,7 +36,8 @@ struct CaptionText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if settings.showSource {
+            // 端到端翻译拿不到原语原文时，原文列会和译文一样，就不重复显示
+            if settings.showSource, !line.text.isEmpty, line.text != line.translation {
                 Text(line.text)
                     .font(.system(size: 15, weight: .regular, design: .serif))
                     .foregroundStyle(.secondary)

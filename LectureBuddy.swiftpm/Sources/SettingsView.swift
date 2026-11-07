@@ -5,10 +5,15 @@ struct SettingsView: View {
     @State private var showKey = false
     @State private var testResult: String?
     @State private var testing = false
+    @State private var buildingTerms = false
+    @State private var termsError: String?
 
     var body: some View {
         NavigationStack {
             Form {
+                realtimeSection
+                topicSection
+                termsSection
                 providerSection
                 apiSection
                 languageSection
@@ -18,6 +23,86 @@ struct SettingsView: View {
             .navigationTitle("设置")
         }
     }
+
+    private var realtimeSection: some View {
+        Section {
+            TextField("DashScope API Key", text: $settings.dashscopeKey)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("业务空间地址", text: $settings.dashscopeURL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+            TextField("模型", text: $settings.asrModel)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Toggle("同时保存课堂录音", isOn: $settings.recordAudio)
+        } header: {
+            Text("实时语音翻译（推荐）")
+        } footer: {
+            Text("语音直接翻成中文，说完立刻出字幕。地址填 https://dashscope.aliyuncs.com/api/v1")
+        }
+    }
+
+    private var topicSection: some View {
+        Section {
+            TextField("例：公司法 股东会决议效力", text: $settings.courseTopic)
+            Button {
+                Task { await buildTerms() }
+            } label: {
+                HStack(spacing: 8) {
+                    if buildingTerms { ProgressView().controlSize(.small) }
+                    Text("根据主题自动生成术语表")
+                }
+            }
+            .disabled(buildingTerms || settings.courseTopic.trimmingCharacters(in: .whitespaces).isEmpty)
+            if let termsError {
+                Text(termsError).font(.footnote).foregroundStyle(.pink)
+            }
+        } header: {
+            Text("今天上什么课")
+        } footer: {
+            Text("填一句今天的内容，会联网把这节课的专业术语整理成术语表。")
+        }
+    }
+
+    private var termsSection: some View {
+        Section {
+            TextEditor(text: $settings.termsText)
+                .frame(minHeight: 110)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        } header: {
+            Text("专业术语表")
+        } footer: {
+            Text("每行一条，写成 原文=译文。共 \(termCount) 条。")
+        }
+    }
+
+    private var termCount: Int {
+        settings.termsText.components(separatedBy: "\n").filter { $0.contains("=") }.count
+    }
+
+    private func buildTerms() async {
+        buildingTerms = true
+        termsError = nil
+        do {
+            let list = try await AIService(settings: settings).buildTermList(
+                topic: settings.courseTopic,
+                sourceLang: settings.sourceTitle,
+                targetLang: settings.targetTitle
+            )
+            if list.isEmpty {
+                termsError = "没搜到可用术语，换个说法再试一下。"
+            } else {
+                settings.termsText = list
+            }
+        } catch {
+            termsError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        buildingTerms = false
+    }
+
 
     private var providerSection: some View {
         Section {

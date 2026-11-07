@@ -5,6 +5,16 @@ struct LiveView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var store: LessonStore
     @StateObject private var session = LiveSession()
+    /// 端到端实时翻译（最快，直接出中文）
+    @StateObject private var live = LiveTranslateSession()
+    /// 走云端翻译时，字幕看这个源；否则看旧的本机识别
+    private var showingLive: Bool { live.isRecording || !live.lines.isEmpty }
+
+    // 界面用的统一入口：端到端翻译优先，其次才是旧的「识别+翻译」
+    private var isRecording: Bool { live.isRecording || session.isRecording }
+    private var lines: [CaptionLine] { showingLive ? live.lines : session.lines }
+    private var elapsed: TimeInterval { showingLive ? live.elapsed : session.elapsed }
+    private var liveError: String? { showingLive ? live.errorMessage : session.errorMessage }
 
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -22,10 +32,10 @@ struct LiveView: View {
                         Button {
                             toggleRecording()
                         } label: {
-                            Label(session.isRecording ? "结束" : "开始",
-                                  systemImage: session.isRecording ? "stop.circle.fill" : "record.circle")
+                            Label(isRecording ? "结束" : "开始",
+                                  systemImage: isRecording ? "stop.circle.fill" : "record.circle")
                             .labelStyle(.titleAndIcon)
-                            .foregroundStyle(session.isRecording ? Color.red : Color.indigo)
+                            .foregroundStyle(isRecording ? Color.red : Color.indigo)
                         }
                     }
                     ToolbarItem(placement: .topBarLeading) {
@@ -34,7 +44,7 @@ struct LiveView: View {
                         } label: {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                         }
-                        .disabled(session.lines.isEmpty)
+                        .disabled(lines.isEmpty)
                     }
                 }
                 .alert("先配置 AI 接口", isPresented: $showSettingsAlert) {
@@ -43,7 +53,7 @@ struct LiveView: View {
                     Text("翻译和笔记需要填一个大模型 API Key，去设置里填好就能开始。")
                 }
                 .sheet(isPresented: $showLarge) {
-                    LargeCaptionView(session: session)
+                    LargeCaptionView(lines: lines)
                 }
                 .sheet(item: $finishedLesson) { lesson in
                     NavigationStack {
@@ -72,35 +82,67 @@ struct LiveView: View {
     }
 
     private func toggleRecording() {
+        if live.isRecording {
+            live.stop()
+            saveLiveLesson()
+            live.lines = []
+            return
+        }
         if session.isRecording {
             let lesson = session.stop()
             finishedLesson = lesson
             store.save(lesson)
+            return
+        }
+        guard settings.isConfigured else {
+            showSettingsAlert = true
+            return
+        }
+        if settings.useLiveTranslate {
+            Task { await live.start() }
         } else {
-            guard settings.isConfigured else {
-                showSettingsAlert = true
-                return
-            }
             Task { await session.start(settings: settings) }
         }
     }
+
+    /// 把端到端翻译的结果存成一节课
+    private func saveLiveLesson() {
+        guard !live.lines.isEmpty else { return }
+        var lesson = Lesson(
+            title: defaultLessonTitle(),
+            duration: live.elapsed,
+            lines: live.lines
+        )
+        lesson.audioFileName = live.savedAudioName
+        lesson.sourceLanguage = settings.sourceLanguage
+        lesson.targetLanguage = settings.targetLanguage
+        finishedLesson = lesson
+        store.save(lesson)
+    }
+
+    private func defaultLessonTitle() -> String {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "zh_CN")
+        fmt.dateFormat = "M月d日 HH:mm 的课"
+        return fmt.string(from: Date())
+    }
     private var captionColumn: some View {
         VStack(spacing: 0) {
-            if session.lines.isEmpty {
+            if lines.isEmpty {
                 emptyState
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(session.lines) { line in
+                            ForEach(lines) { line in
                                 CaptionText(line: line)
                                     .id(line.id)
                             }
                         }
                         .padding(16)
                     }
-                    .onChange(of: session.lines.count) { _, _ in
-                        if let last = session.lines.last {
+                    .onChange(of: lines.count) { _, _ in
+                        if let last = lines.last {
                             withAnimation(.easeOut(duration: 0.2)) {
                                 proxy.scrollTo(last.id, anchor: .bottom)
                             }
@@ -109,7 +151,7 @@ struct LiveView: View {
                 }
             }
 
-            if let error = session.errorMessage {
+            if let error = liveError {
                 banner(error, icon: "exclamationmark.triangle.fill", color: .orange)
             }
             if let error = session.translationError {
@@ -157,10 +199,10 @@ struct LiveView: View {
     private var compactControls: some View {
         VStack(spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text(session.isRecording ? "正在听课" : "待机")
+                Text(isRecording ? "正在听课" : "待机")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(session.isRecording ? Color.red : Color.secondary)
-                Text(timeString(session.elapsed))
+                    .foregroundStyle(isRecording ? Color.red : Color.secondary)
+                Text(timeString(elapsed))
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                 Spacer()
@@ -177,7 +219,7 @@ struct LiveView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-                .disabled(session.lines.isEmpty)
+                .disabled(lines.isEmpty)
             }
         }
     }
@@ -185,10 +227,10 @@ struct LiveView: View {
     private var regularControls: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(session.isRecording ? "正在听课" : "待机")
+                Text(isRecording ? "正在听课" : "待机")
                     .font(.headline)
-                    .foregroundStyle(session.isRecording ? Color.red : Color.secondary)
-                Text(timeString(session.elapsed))
+                    .foregroundStyle(isRecording ? Color.red : Color.secondary)
+                Text(timeString(elapsed))
                     .font(.system(size: 40, weight: .semibold, design: .rounded))
                     .monospacedDigit()
             }
@@ -209,7 +251,7 @@ struct LiveView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("最近一句").font(.caption).foregroundStyle(.secondary)
-                if let last = session.lines.last, let translation = last.translation {
+                if let last = lines.last, let translation = last.translation {
                     Text(translation)
                         .font(.system(size: 26, weight: .bold))
                         .lineLimit(6)
@@ -230,7 +272,7 @@ struct LiveView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-                .disabled(session.lines.isEmpty)
+                .disabled(lines.isEmpty)
             }
             .padding(.bottom, 16)
         }
@@ -249,7 +291,7 @@ struct LiveView: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .tint(session.isRecording ? Color.red : Color.indigo)
+        .tint(isRecording ? Color.red : Color.indigo)
         .controlSize(.large)
     }
 
@@ -267,7 +309,7 @@ struct LiveView: View {
 }
 /// 全屏大字幕：把 iPad 架在桌上，抬头就能看
 struct LargeCaptionView: View {
-    @ObservedObject var session: LiveSession
+    let lines: [CaptionLine]
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -276,7 +318,7 @@ struct LargeCaptionView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        ForEach(session.lines.suffix(40)) { line in
+                        ForEach(lines.suffix(40)) { line in
                             VStack(alignment: .leading, spacing: 6) {
                                 if let t = line.translation, !t.isEmpty {
                                     Text(t)
@@ -292,11 +334,11 @@ struct LargeCaptionView: View {
                     }
                     .padding(28)
                 }
-                .onChange(of: session.lines.count) { _, _ in
-                    if let last = session.lines.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                .onChange(of: lines.count) { _, _ in
+                        if let last = lines.last {
+                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
                     }
-                }
             }
             Button {
                 dismiss()

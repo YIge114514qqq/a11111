@@ -1,8 +1,32 @@
+# macOS / Windows
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Python
 __pycache__/
+
+# 构建产物
 *.ipa
+*.apk
+*.rar
+*.zip
 Payload/
 build/
 DerivedData/
 *.xcodeproj
+*.xcworkspace
+
+# 本地工具链（很大，不传）
+tools/
+platform-tools/
+android/
+dist/
+ui-preview/
 .lynshen/
+
+# 截图 / 临时文件（里面可能含 Key）
+shot*.png
+shot*.jpg
+ui*.xml
+tmp-settings.pb

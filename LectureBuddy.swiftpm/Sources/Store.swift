@@ -12,6 +12,17 @@ final class AppSettings: ObservableObject {
     @Published var notesLanguage: String { didSet { defaults.set(notesLanguage, forKey: "notesLanguage") } }
     @Published var showSource: Bool { didSet { defaults.set(showSource, forKey: "showSource") } }
 
+    // 阿里云实时语音翻译（端到端，最快）
+    @Published var dashscopeKey: String { didSet { defaults.set(dashscopeKey, forKey: "dashscopeKey") } }
+    @Published var dashscopeURL: String { didSet { defaults.set(dashscopeURL, forKey: "dashscopeURL") } }
+    @Published var asrModel: String { didSet { defaults.set(asrModel, forKey: "asrModel") } }
+
+    /// 今天这节课的主题，用来联网生成术语表
+    @Published var courseTopic: String { didSet { defaults.set(courseTopic, forKey: "courseTopic") } }
+    /// 专业术语表：每行「原文=译文」，提升专业词翻译准确率
+    @Published var termsText: String { didSet { defaults.set(termsText, forKey: "termsText") } }
+    /// 是否同时保存课堂录音
+    @Published var recordAudio: Bool { didSet { defaults.set(recordAudio, forKey: "recordAudio") } }
     private let defaults = UserDefaults.standard
 
     private init() {
@@ -22,6 +33,12 @@ final class AppSettings: ObservableObject {
         targetLanguage = defaults.string(forKey: "targetLanguage") ?? "zh-CN"
         notesLanguage = defaults.string(forKey: "notesLanguage") ?? "简体中文"
         showSource = defaults.object(forKey: "showSource") as? Bool ?? true
+        dashscopeKey = defaults.string(forKey: "dashscopeKey") ?? ""
+        dashscopeURL = defaults.string(forKey: "dashscopeURL") ?? ""
+        asrModel = defaults.string(forKey: "asrModel") ?? "qwen3.5-livetranslate-flash-realtime"
+        courseTopic = defaults.string(forKey: "courseTopic") ?? ""
+        termsText = defaults.string(forKey: "termsText") ?? ""
+        recordAudio = defaults.object(forKey: "recordAudio") as? Bool ?? true
     }
 
     var sourceTitle: String {
@@ -33,6 +50,11 @@ final class AppSettings: ObservableObject {
     }
 
     var isConfigured: Bool { !apiKey.isEmpty }
+
+    /// 云端实时翻译是否可用
+    var useLiveTranslate: Bool {
+        !dashscopeKey.isEmpty && !dashscopeURL.isEmpty
+    }
 
     func preset(_ name: String) {
         switch name {
