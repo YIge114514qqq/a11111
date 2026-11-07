@@ -346,11 +346,15 @@ final class LiveTranslateSession: ObservableObject {
 final class AudioCapture {
 
     private let engine = AVAudioEngine()
-    private let targetFormat: AVAudioFormat
     private var converter: AVAudioConverter?
     private let onChunk: (Data) -> Void
 
+    /// 目标格式：16k / 单声道 / 16bit，阿里云要的就是这个
+    private let targetFormat: AVAudioFormat?
+
     private var fileHandle: FileHandle?
+    /// tap 是否已装上：start() 中途抛错时不会再被执行，若不记标记，下次 start 会重复 installTap 直接崩
+    private var tapInstalled = false
     private(set) var fileName: String?
     private var dataBytes: UInt32 = 0
     /// 音频回调在后台线程，stop() 在主线程；写文件全部串行到这条队列，避免竞态
@@ -358,34 +362,67 @@ final class AudioCapture {
 
     init(onChunk: @escaping (Data) -> Void) {
         self.onChunk = onChunk
+        // 不用 ! 强制解包：构造失败就让调用方报错，而不是崩溃
         self.targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                           sampleRate: 16000,
                                           channels: 1,
-                                          interleaved: true)!
+                                          interleaved: true)
     }
 
     func start() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default,
-                                options: [.defaultToSpeaker, .allowBluetooth])
-        try session.setActive(true, options: [])
-
-        openWav()
-
-        let input = engine.inputNode
-        let inFormat = input.inputFormat(forBus: 0)
-
-        input.installTap(onBus: 0, bufferSize: 1600, format: inFormat) { [weak self] buffer, _ in
-            self?.process(buffer)
+        guard let targetFormat else {
+            throw NSError(domain: "LectureBuddy", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "无法创建 16kHz 音频格式"])
         }
 
+        // 1. 配置音频会话
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .measurement,
+                                options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setPreferredSampleRate(16000)
+        try session.setActive(true, options: [])
+
+        // 2. 开录音文件
+        openWav()
+
+        // 3. 安装 tap —— 这是最容易崩的地方：
+        //    必须用 outputFormat，不能用 inputFormat（两者不一致时会抛 ObjC 异常，Swift try 抓不到）
+        let input = engine.inputNode
+        let tapFormat = input.outputFormat(forBus: 0)
+
+        guard tapFormat.sampleRate > 0, tapFormat.channelCount > 0 else {
+            throw NSError(domain: "LectureBuddy", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "麦克风不可用，检查是否有其他 App 在占用"])
+        }
+
+        // 转换器在 tap 回调外先建好，避免每帧重建
+        converter = AVAudioConverter(from: tapFormat, to: targetFormat)
+
+        input.installTap(onBus: 0, bufferSize: 1024, format: tapFormat) { [weak self] buffer, _ in
+            self?.process(buffer)
+        }
+        tapInstalled = true
+
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // 启动失败要把 tap 拆干净，否则下一次点开始会因重复安装 tap 而崩溃
+            if tapInstalled {
+                input.removeTap(onBus: 0)
+                tapInstalled = false
+            }
+            throw error
+        }
     }
 
     func stop() {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        // removeTap 在没有 tap 时会抛异常，先判断
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        if engine.isRunning { engine.stop() }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         // 等队列里排队的写入全部完成后，再回填 WAV 头，否则长度会少算
         writeQueue.sync { self.closeWav() }
@@ -394,7 +431,7 @@ final class AudioCapture {
     // MARK: - 转换
 
     private func process(_ buffer: AVAudioPCMBuffer) {
-        guard let converted = convert(buffer) else { return }
+        guard let targetFormat, let converted = convert(buffer, to: targetFormat) else { return }
         let frames = Int(converted.frameLength)
         guard frames > 0 else { return }
 
@@ -407,21 +444,22 @@ final class AudioCapture {
         writeQueue.async { [weak self] in self?.writeWav(data) }
     }
 
-    private func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+    private func convert(_ buffer: AVAudioPCMBuffer, to target: AVAudioFormat) -> AVAudioPCMBuffer? {
         let inFormat = buffer.format
-        if inFormat.sampleRate == targetFormat.sampleRate,
-           inFormat.channelCount == targetFormat.channelCount,
+        // 已经是目标格式，直接用
+        if inFormat.sampleRate == target.sampleRate,
+           inFormat.channelCount == target.channelCount,
            inFormat.commonFormat == .pcmFormatInt16 {
             return buffer
         }
-        if converter == nil || converter?.inputFormat != inFormat {
-            converter = AVAudioConverter(from: inFormat, to: targetFormat)
+        if converter == nil {
+            converter = AVAudioConverter(from: inFormat, to: target)
         }
         guard let conv = converter else { return nil }
 
-        let ratio = targetFormat.sampleRate / inFormat.sampleRate
+        let ratio = target.sampleRate / inFormat.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
-        guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return nil }
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
 
         var supplied = false
         var error: NSError?

@@ -19,8 +19,9 @@ targets:
     platform: iOS
     sources:
       - path: LectureBuddy.swiftpm/Sources
-    info:
-      path: CI/Info.plist
+    # 注意：不要写 info.path —— XcodeGen 会用它重写该 plist，
+    # 把 UILaunchScreen / 麦克风权限说明冲掉（会导致上下黑边 + 录音闪退）。
+    # 只用下面 settings 里的 INFOPLIST_FILE 指过来即可。
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lecturebuddy.app

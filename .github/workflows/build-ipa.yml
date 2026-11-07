@@ -44,6 +44,74 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
             build
+      - name: Build for simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project LectureBuddy.xcodeproj \
+            -target LectureBuddy \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro Max' \
+            SYMROOT="$PWD/build-sim" \
+            OBJROOT="$PWD/build-sim/obj" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Run in simulator and screenshot
+        run: |
+          set -x
+          APP="$PWD/build-sim/Debug-iphonesimulator/LectureBuddy.app"
+          test -d "$APP" || { echo "模拟器 app 未生成"; find build-sim -name '*.app'; exit 1; }
+
+          DEV=$(xcrun simctl list devices available | grep -m1 'iPhone 16 Pro Max' | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          echo "device=$DEV"
+          xcrun simctl boot "$DEV" || true
+          xcrun simctl bootstatus "$DEV" -b
+
+          xcrun simctl install "$DEV" "$APP"
+          xcrun simctl launch "$DEV" com.lecturebuddy.app || echo "launch failed (可能因缺签名)"
+          sleep 6
+
+          xcrun simctl io "$DEV" screenshot /tmp/shot1.png
+          cp /tmp/shot1.png "$PWD/sim-screenshot-1.png" || true
+
+          # 截整个模拟器屏幕总是全尺寸，测不出兼容模式。
+          # 改用 App 自报的 scene 尺寸：兼容模式下 iOS 把窗口封在 375x667pt（上下黑边）。
+          xcrun simctl spawn "$DEV" log show --last 60s --predicate 'process == "LectureBuddy"' > /tmp/app.log 2>&1 || true
+          grep -iE 'bounds|window|scene|compat|LaunchScreen' /tmp/app.log | head -20 || true
+          SIZE=$(grep -oE '(375|390|393|402|430|440)x(667|812|844|852|874|932|956)' /tmp/app.log | sort -u | paste -sd ' ' -)
+          echo "App 窗口尺寸候选: $SIZE"
+          if echo "$SIZE" | grep -q '375x667'; then
+            echo "ERROR: 检测到 375x667，App 运行在兼容模式（上下黑边）"
+            exit 1
+          fi
+          echo "OK: 未检测到兼容模式"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-screenshots
+          path: |
+            sim-screenshot-*.png
+          retention-days: 14
+      - name: Verify Info.plist in built app
+        run: |
+          PLIST="$PWD/build/Release-iphoneos/LectureBuddy.app/Info.plist"
+          test -f "$PLIST" || { echo "找不到打包后的 Info.plist"; exit 1; }
+          echo "--- 包内 Info.plist 关键项 ---"
+          /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST" || true
+          # 缺任何一个都会在真机上出问题：没有麦克风说明 → 点录音闪退；
+          # 没有 UILaunchScreen → iOS 按旧尺寸渲染，界面上下黑边。
+          /usr/bin/plutil -extract NSMicrophoneUsageDescription raw "$PLIST" > /dev/null \
+            || { echo "ERROR: 缺 NSMicrophoneUsageDescription，点录音会闪退"; exit 1; }
+          /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$PLIST" > /dev/null \
+            || { echo "ERROR: 缺 UILaunchScreen，界面会上下黑边"; exit 1; }
+          echo "OK: plist 关键项齐全"
 
       - name: Package unsigned IPA
         run: |
