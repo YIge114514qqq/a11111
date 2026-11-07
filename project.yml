@@ -1,6 +1,6 @@
 name: LectureBuddy
 options:
-  bundleIdPrefix: com.example
+  bundleIdPrefix: com.lecturebuddy
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -21,29 +21,12 @@ targets:
       - path: LectureBuddy.swiftpm/Sources
     info:
       path: CI/Info.plist
-      properties:
-        CFBundleDisplayName: LectureBuddy
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
-        UILaunchScreen: {}
-        UIRequiresFullScreen: "NO"
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        NSMicrophoneUsageDescription: "需要用麦克风录制课堂声音，生成实时字幕、转写和笔记。录音只保存在你的设备上。"
-        NSSpeechRecognitionUsageDescription: "需要用语音识别把老师说的话转成文字，才能生成双语字幕和课堂笔记。"
-        ITSAppUsesNonExemptEncryption: "NO"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.lecturebuddy
+        PRODUCT_BUNDLE_IDENTIFIER: com.lecturebuddy.app
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: "NO"
+        INFOPLIST_FILE: CI/Info.plist
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGNING_ALLOWED: "NO"
