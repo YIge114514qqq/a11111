@@ -90,6 +90,37 @@ jobs:
           fi
           echo "OK: 未检测到兼容模式"
 
+      - name: Smoke test - tap record and watch state machine
+        run: |
+          set -x
+          DEV=$(xcrun simctl list devices available | grep -m1 'iPhone 16 Pro Max' | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+
+          # 预置一个假 Key，专门测「点开始后会不会一秒被踢回」这个状态机。
+          # 不会真的连服务（假 Key 必被拒），所以不会泄露也不用真实凭据。
+          DATA=$(xcrun simctl get_app_container "$DEV" com.lecturebuddy.app data)
+          PLIST="$DATA/Library/Preferences/com.lecturebuddy.app.plist"
+          mkdir -p "$(dirname "$PLIST")"
+          /usr/libexec/PlistBuddy -c "Add :dashscopeKey string sk-test-0000" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :dashscopeKey sk-test-0000" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :dashscopeURL string https://dashscope.aliyuncs.com/api/v1" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :dashscopeURL https://dashscope.aliyuncs.com/api/v1" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :asrModel string qwen3.5-livetranslate-flash-realtime" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :asrModel qwen3.5-livetranslate-flash-realtime" "$PLIST"
+          cat "$PLIST" || true
+
+          xcrun simctl terminate "$DEV" com.lecturebuddy.app || true
+          # -autostart 是仅用于自动化的调试开关：App 启动后自己点一次“开始记录”
+          xcrun simctl launch "$DEV" com.lecturebuddy.app -autostart YES
+          sleep 8
+
+          xcrun simctl io "$DEV" screenshot /tmp/rec.png
+          cp /tmp/rec.png "$PWD/sim-screenshot-recording.png" || true
+          echo "--- 启动 8 秒后的截图已抓 ---"
+
+          xcrun simctl spawn "$DEV" log show --last 30s --predicate 'process == "LectureBuddy"' > /tmp/rec.log 2>&1 || true
+          grep -iE 'LectureBuddy|error|websocket|dashscope' /tmp/rec.log | tail -40 || true
+
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

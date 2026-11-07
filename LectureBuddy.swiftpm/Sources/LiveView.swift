@@ -50,7 +50,13 @@ struct LiveView: View {
                 .alert("先配置 AI 接口", isPresented: $showSettingsAlert) {
                     Button("知道了", role: .cancel) { }
                 } message: {
-                    Text("翻译和笔记需要填一个大模型 API Key，去设置里填好就能开始。")
+                    Text("实时字幕只需要填 DashScope Key；课后笔记和提问才需要另一个大模型 Key。去设置里填一下。")
+                }
+                // 仅用于自动化冒烟测试：模拟器带 -autostart YES 启动时，自己点一次开始
+                .task {
+                    guard ProcessInfo.processInfo.arguments.contains("-autostart") else { return }
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    toggleRecording()
                 }
                 .sheet(isPresented: $showLarge) {
                     LargeCaptionView(lines: lines)
@@ -202,6 +208,12 @@ struct LiveView: View {
                 Text(isRecording ? "正在听课" : "待机")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(isRecording ? Color.red : Color.secondary)
+                // 录音时写出实际进度：连不上、没权限时一眼能看出卡在哪步
+                if isRecording, showingLive, !live.status.isEmpty {
+                    Text(live.status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text(timeString(elapsed))
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .monospacedDigit()

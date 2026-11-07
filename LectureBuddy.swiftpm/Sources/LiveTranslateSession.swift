@@ -25,6 +25,16 @@ final class LiveTranslateSession: ObservableObject {
     private var ticker: Timer?
     private var startedAt = Date()
     private var eventSeq = 0
+    /// WebSocket 是否真的连通了。Android 那边踩过同样的坑：
+    /// socket.resume() 只是开始握手，立刻发 session.update / 音频会被丢掉。
+    private var isOpen = false
+    /// 没连通前先缓存的音频块，连通后再补发
+    private var pendingChunks: [Data] = []
+    private let maxPending = 200
+    /// 服务端在关闭连接前发回的原始错误（如鉴权失败），报真正原因而不是笼统的「连接断开」
+    private var lastErrorBody = ""
+    /// 给人看的当前进度：出问题时能直接看出卡在哪一步
+    @Published var status = ""
 
     // 当前这句话的原文 / 译文
     private var curSource = ""
@@ -59,32 +69,43 @@ final class LiveTranslateSession: ObservableObject {
         }
 
         var request = URLRequest(url: url)
-        request.addValue("Bearer \(settings.dashscopeKey)", forHTTPHeaderField: "Authorization")
+        request.addValue("Bearer \(settings.dashscopeKey.trimmingCharacters(in: .whitespacesAndNewlines))",
+                         forHTTPHeaderField: "Authorization")
         request.addValue("realtime=v1", forHTTPHeaderField: "OpenAI-Beta")
 
         let session = URLSession(configuration: .default)
         let task = session.webSocketTask(with: request)
         socket = task
-        task.resume()
 
         startedAt = Date()
         elapsed = 0
+        isOpen = false
+        pendingChunks.removeAll()
         isRecording = true
+        status = "正在连接服务器…"
         startTicker()
 
+        // 顺序很重要：先发 connect，等 receiveLoop 拿到第一帧（握手完成）再发 session.update。
+        // 以前 resume() 后立刻发，握手还没完成，配置和开头几百毫秒音频全被丢掉了。
+        task.resume()
         receiveLoop(task)
-        sendSessionUpdate(settings)
         startCapture()
     }
 
+    /// 关掉录音。故意不用 `guard isRecording else { return }`：
+    /// start() 中途失败时 isRecording 已经置 true，这个 guard 会让 UI 卡在录音态；
+    /// 而且错误分支调用 stop() 会直接把已录到的字幕丢掉。
     func stop() {
-        guard isRecording else { return }
+        if capture == nil && socket == nil && !isRecording { return }
         isRecording = false
         ticker?.invalidate()
         ticker = nil
         savedAudioName = capture?.fileName
         capture?.stop()
         capture = nil
+        isOpen = false
+        pendingChunks.removeAll()
+        status = ""
         send(#"{"event_id":"\#(nextID())","type":"session.finish"}"#)
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
@@ -162,8 +183,27 @@ final class LiveTranslateSession: ObservableObject {
     }
 
     private func sendAudio(_ data: Data) {
+        // 还没连通就先存着，等 session.created 到了再补发（对齐 Android 的 pending 队列）
+        guard isOpen else {
+            pendingChunks.append(data)
+            while pendingChunks.count > maxPending { pendingChunks.removeFirst() }
+            return
+        }
         let b64 = data.base64EncodedString()
         send("{\"event_id\":\"\(nextID())\",\"type\":\"input_audio_buffer.append\",\"audio\":\"\(b64)\"}")
+    }
+
+    /// 握手完成：发配置并补发缓冲音频
+    private func onOpen() {
+        guard !isOpen else { return }
+        isOpen = true
+        lastErrorBody = ""
+        status = "已连上，等待识别…"
+        let settings = AppSettings.shared
+        sendSessionUpdate(settings)
+        let queued = pendingChunks
+        pendingChunks.removeAll()
+        for chunk in queued { sendAudio(chunk) }
     }
 
     /// 用 async 循环收消息：比递归 receive 更稳，也不会堆栈溢出
@@ -176,12 +216,25 @@ final class LiveTranslateSession: ObservableObject {
 
                 do {
                     let message = try await task.receive()
-                    if case .string(let text) = message {
+                    switch message {
+                    case .string(let text):
+                        // 收到第一帧就说明握手已完成
+                        let opened = await self.isOpen
+                        if !opened { self.onOpen() }
                         await self.handle(text)
+                    case .data(let raw):
+                        let opened2 = await self.isOpen
+                        if !opened2 { self.onOpen() }
+                        if let text = String(data: raw, encoding: .utf8) { await self.handle(text) }
+                    @unknown default:
+                        break
                     }
                 } catch {
                     if await self.isRecording {
-                        self.errorMessage = "连接断开：\(error.localizedDescription)"
+                        let detail = self.lastErrorBody
+                        self.errorMessage = detail.isEmpty
+                            ? "连接断开：\(error.localizedDescription)"
+                            : detail
                         self.stop()
                     }
                     return
@@ -199,7 +252,8 @@ final class LiveTranslateSession: ObservableObject {
             let code = obj["code"] as? String ?? ""
             let msg = obj["message"] as? String ?? ""
             if !code.isEmpty || !msg.isEmpty {
-                errorMessage = friendly(code, msg)
+                lastErrorBody = friendly(code, msg)
+                errorMessage = lastErrorBody
                 stop()
             }
             return
@@ -207,7 +261,8 @@ final class LiveTranslateSession: ObservableObject {
 
         switch type {
         case "session.created", "session.updated":
-            break
+            // session.updated 到了说明配置真的生效了（紧凑单行 JSON 才不会被忽略）
+            status = "已就绪，正在听…"
 
         case "input_audio_buffer.speech_started":
             curSource = ""
@@ -252,7 +307,8 @@ final class LiveTranslateSession: ObservableObject {
             let err = obj["error"] as? [String: Any]
             let code = err?["code"] as? String ?? ""
             let msg = err?["message"] as? String ?? "语音翻译报错"
-            errorMessage = friendly(code, msg)
+            lastErrorBody = friendly(code, msg)
+            errorMessage = lastErrorBody
             stop()
 
         default:
