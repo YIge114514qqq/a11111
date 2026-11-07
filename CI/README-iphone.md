@@ -16,20 +16,19 @@ Swift Playgrounds 只支持 iPad 和 Mac，**iPhone 装不了它**。
 
 ## 第一步：把代码传到 GitHub
 
-1. 打开 https://github.com/new ，建一个空仓库，比如叫 `lecturebuddy`，**不要**勾选初始化 README。
-2. 在项目文件夹里打开 PowerShell，依次执行（把地址换成你自己的）：
+**git 已经装好了，本地仓库也建好了（3 次提交，全部 LF 换行），只剩推送这一步。**
+
+1. 打开 https://github.com/new ，仓库名填 `lecturebuddy`，选 **Private** 也行，
+   **不要**勾选 "Add a README / .gitignore / license"（勾了就冲突）。
+2. 建好后页面会显示仓库地址，形如 `https://github.com/你的用户名/lecturebuddy.git`。
+3. 在本文件夹右键 → "在终端中打开"，执行：
 
 ```powershell
-cd "C:\Users\Administrator\Desktop\ai翻译"
-git init
-git add .
-git commit -m "LectureBuddy first build"
-git branch -M main
-git remote add origin https://github.com/你的用户名/lecturebuddy.git
-git push -u origin main
+.\push.ps1 https://github.com/你的用户名/lecturebuddy.git
 ```
 
-> 没有 git？先执行 `winget install --id Git.Git -e`，装完重开一个 PowerShell 窗口。
+第一次会弹出浏览器让你登录 GitHub，登录完自动推送。
+（如果提示脚本被禁止运行，先执行一次 `Set-ExecutionPolicy -Scope Process Bypass`）
 
 ## 第二步：让 GitHub 帮你编译
 
