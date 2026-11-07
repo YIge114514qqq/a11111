@@ -99,7 +99,7 @@ struct AIService {
         格式：逐句对应，不合并、不省略。
         只输出一个 JSON 字符串数组，长度必须等于原文句数，不要输出任何其他文字。
         """
-        let answer = try complete(messages: [
+        let answer = try await complete(messages: [
             ChatMessage(role: "system", content: system),
             ChatMessage(role: "user", content: numbered)
         ])
@@ -136,7 +136,7 @@ struct AIService {
         要求：sections 按讲课顺序划分，每节 2-5 个要点；cards 输出 5-8 张，问题要能直接用来考前自测；
         glossary 只收这门课的专业术语。不要输出 JSON 以外的任何文字。
         """
-        let answer = try complete(messages: [
+        let answer = try await complete(messages: [
             ChatMessage(role: "system", content: system),
             ChatMessage(role: "user", content: String(transcript.prefix(24000)))
         ], temperature: 0.3)
@@ -162,6 +162,9 @@ struct AIService {
         5. 如果这是个容易混淆的难点，指出易错点。
         语言要像学长给学妹讲题，直接、有耐心，不要堆术语。
         """
+        return try await complete(messages: [
+            ChatMessage(role: "system", content: system),
+            ChatMessage(role: "user", content: "【课堂内容】\n" + String(context.prefix(24000)) + "\n\n【问题】\n" + question)
         ], temperature: 0.3)
     }
 
@@ -178,7 +181,7 @@ struct AIService {
         只输出「原文=译文」，一行一条，不要编号、不要解释、不要任何多余文字。
         原文用授课语言（\(sourceLang)）写，译文用 \(targetLang) 写。
         """
-        let answer = try complete(messages: [
+        let answer = try await complete(messages: [
             ChatMessage(role: "system", content: system),
             ChatMessage(role: "user", content: "今天这节课：" + topic.trimmingCharacters(in: .whitespaces))
         ], temperature: 0.3)

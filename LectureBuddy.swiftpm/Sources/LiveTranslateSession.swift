@@ -168,25 +168,21 @@ final class LiveTranslateSession: ObservableObject {
 
     /// 用 async 循环收消息：比递归 receive 更稳，也不会堆栈溢出
     private func receiveLoop(_ task: URLSessionWebSocketTask) {
-        Task { [weak self] in
+        // 不用 [weak self]：循环在 stop() 后立即退出，不会长期持有
+        Task { [self] in
             while true {
-                guard let self else { return }
-                let stillRecording = await MainActor.run { self.isRecording }
+                let stillRecording = await self.isRecording
                 if !stillRecording { return }
 
                 do {
                     let message = try await task.receive()
-                    guard let self else { return }
                     if case .string(let text) = message {
-                        await MainActor.run { self.handle(text) }
+                        await self.handle(text)
                     }
                 } catch {
-                    guard let self else { return }
-                    await MainActor.run {
-                        if self.isRecording {
-                            self.errorMessage = "连接断开：\(error.localizedDescription)"
-                            self.stop()
-                        }
+                    if await self.isRecording {
+                        self.errorMessage = "连接断开：\(error.localizedDescription)"
+                        self.stop()
                     }
                     return
                 }
@@ -389,7 +385,7 @@ final class AudioCapture {
 
     func stop() {
         engine.inputNode.removeTap(onBus: 0)
-        try? engine.stop()
+        engine.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         // 等队列里排队的写入全部完成后，再回填 WAV 头，否则长度会少算
         writeQueue.sync { self.closeWav() }
