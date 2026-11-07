@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.swift text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.plist text eol=lf
+*.png binary
+*.ipa binary
