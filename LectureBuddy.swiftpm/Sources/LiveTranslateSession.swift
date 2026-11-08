@@ -433,9 +433,11 @@ final class AudioCapture {
 
         // 1. 配置音频会话
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .measurement,
+        try session.setCategory(.playAndRecord, mode: .default,
                                 options: [.defaultToSpeaker, .allowBluetooth])
-        try session.setPreferredSampleRate(16000)
+        // 不要调 setPreferredSampleRate：它会触发会话重配置，输入节点格式跟着变，
+        // 日志里会出现 error -10879 / reconfig pending，tap 就白接了。
+        // 16k 交给下面的 AVAudioConverter 重采样，稳定性比强制硬件采样率好得多。
         try session.setActive(true, options: [])
 
         // 2. 开录音文件
@@ -444,6 +446,7 @@ final class AudioCapture {
         // 3. 安装 tap —— 这是最容易崩的地方：
         //    必须用 outputFormat，不能用 inputFormat（两者不一致时会抛 ObjC 异常，Swift try 抓不到）
         let input = engine.inputNode
+        // 会话激活后格式可能已变，这里再取一次，且以 outputFormat 为准
         let tapFormat = input.outputFormat(forBus: 0)
 
         guard tapFormat.sampleRate > 0, tapFormat.channelCount > 0 else {
