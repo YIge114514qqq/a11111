@@ -7,14 +7,19 @@ struct LiveView: View {
     @StateObject private var session = LiveSession()
     /// 端到端实时翻译（最快，直接出中文）
     @StateObject private var live = LiveTranslateSession()
-    /// 走云端翻译时，字幕看这个源；否则看旧的本机识别
     private var showingLive: Bool { live.isRecording || !live.lines.isEmpty }
-
     // 界面用的统一入口：端到端翻译优先，其次才是旧的「识别+翻译」
     private var isRecording: Bool { live.isRecording || session.isRecording }
     private var lines: [CaptionLine] { showingLive ? live.lines : session.lines }
     private var elapsed: TimeInterval { showingLive ? live.elapsed : session.elapsed }
-    private var liveError: String? { showingLive ? live.errorMessage : session.errorMessage }
+    /// 出错时优先显示端到端引擎的错误：
+    /// 否则一 stop()，showingLive 变 false，刚拿到的 401/权限错误就被吞掉，
+    /// 用户只看到「一秒就结束、什么都没说」。
+    private var liveError: String? {
+        if let e = live.errorMessage, !e.isEmpty { return e }
+        if live.isRecording || !live.lines.isEmpty { return nil }
+        return session.errorMessage
+    }
 
     @Environment(\.horizontalSizeClass) private var sizeClass
 
@@ -158,7 +163,19 @@ struct LiveView: View {
             }
 
             if let error = liveError {
+                // 错误会一直留着直到用户看过，避免“秒退但不知道为啥”
                 banner(error, icon: "exclamationmark.triangle.fill", color: .orange)
+                    .overlay(alignment: .trailing) {
+                        Button {
+                            live.clearError()
+                            session.errorMessage = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 12)
+                    }
             }
             if let error = session.translationError {
                 banner("翻译没成功：" + error, icon: "bolt.slash.fill", color: .pink)

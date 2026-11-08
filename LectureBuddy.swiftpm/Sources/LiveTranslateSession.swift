@@ -95,6 +95,11 @@ final class LiveTranslateSession: ObservableObject {
         startCapture()
     }
 
+    /// 用户手动清掉错误提示
+    func clearError() {
+        errorMessage = nil
+    }
+
     /// 关掉录音。故意不用 `guard isRecording else { return }`：
     /// start() 中途失败时 isRecording 已经置 true，这个 guard 会让 UI 卡在录音态；
     /// 而且错误分支调用 stop() 会直接把已录到的字幕丢掉。
