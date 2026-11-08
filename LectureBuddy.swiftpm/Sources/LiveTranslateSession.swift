@@ -480,6 +480,15 @@ final class AudioCapture {
         }
 
         // 1. 配置音频会话
+        // 引擎是长期持有的实例，上一次 stop() 后它内部还挂着旧会话，
+        // 直接 start 会打印「associating with audio session (0x0), error -10879」并且拿不到音频。
+        // 先把它停干净，再激活会话，然后才取 inputNode 的格式。
+        if engine.isRunning { engine.stop() }
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default,
                                 options: [.defaultToSpeaker, .allowBluetooth])
@@ -487,6 +496,13 @@ final class AudioCapture {
         // 日志里会出现 error -10879 / reconfig pending，tap 就白接了。
         // 16k 交给下面的 AVAudioConverter 重采样，稳定性比强制硬件采样率好得多。
         try session.setActive(true, options: [])
+
+        // 会话刚激活就立刻取格式，可能还是 0；等一拍让它稳定下来。
+        var waited = 0
+        while engine.inputNode.outputFormat(forBus: 0).sampleRate <= 0, waited < 10 {
+            Thread.sleep(forTimeInterval: 0.05)
+            waited += 1
+        }
 
         // 2. 开录音文件（关掉「保存录音」时跳过，不落盘）
         if saveAudio { openWav() }

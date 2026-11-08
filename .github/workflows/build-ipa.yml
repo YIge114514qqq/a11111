@@ -127,12 +127,16 @@ jobs:
           echo "--- 检查 App 是否仍在运行 ---"
           xcrun simctl spawn "$DEV" launchctl list 2>/dev/null | grep -i lecturebuddy || echo "未在进程列表（可能已退出）"
 
-          # 音频自检：直接看日志里有没有 CoreAudio 的致命错（StopIOProc/HALPlugIn 失败）
-          if grep -qE 'StopIOProc.*error|HALPlugIn.*error' /tmp/rec.log; then
-            echo "ERROR: 音频链路断了（CoreAudio 报 StopIOProc/HALPlugIn 错误）"
+          # 音频自检：无头模拟器没有音频输入设备，StopIOProc 会报 "(!dev)"，
+          # 这是环境限制不是 App 的 bug。把这类已知无害行排除后再看有没有真故障。
+          REAL_ERR=$(grep -E 'StopIOProc.*error|HALPlugIn.*error' /tmp/rec.log \
+                     | grep -v '(!dev)' | grep -v '560227702' || true)
+          if [ -n "$REAL_ERR" ]; then
+            echo "ERROR: 音频链路断了："
+            echo "$REAL_ERR"
             exit 1
           fi
-          echo "OK: 无 CoreAudio 致命错误"
+          echo "OK: 无 CoreAudio 致命错误（无音频设备的 (!dev) 已忽略）"
 
 
 
