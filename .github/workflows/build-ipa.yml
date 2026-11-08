@@ -114,7 +114,8 @@ jobs:
           xcrun simctl terminate "$DEV" com.lecturebuddy.app || true
           # -autostart 是仅用于自动化的调试开关：App 启动后自己点一次“开始记录”
           xcrun simctl launch "$DEV" com.lecturebuddy.app -autostart YES
-          sleep 8
+          # 等久一点：要完整走过握手 + 采集几秒音频才能判断链路
+          sleep 12
 
           xcrun simctl io "$DEV" screenshot /tmp/rec.png
           cp /tmp/rec.png "$PWD/sim-screenshot-recording.png" || true
@@ -123,10 +124,15 @@ jobs:
           xcrun simctl spawn "$DEV" log show --last 30s --predicate 'process == "LectureBuddy"' > /tmp/rec.log 2>&1 || true
           grep -iE 'error|websocket|dashscope|status' /tmp/rec.log | tail -40 || true
 
-          # 假 Key 下会很快报错停下，但如果 8 秒后仍显示“正在听课”，说明状态机正常、
-          # 只是真 Key 才能拿到字幕。这一步只验证「不会一秒被踢回待机」。
           echo "--- 检查 App 是否仍在运行 ---"
           xcrun simctl spawn "$DEV" launchctl list 2>/dev/null | grep -i lecturebuddy || echo "未在进程列表（可能已退出）"
+
+          # 音频自检：直接看日志里有没有 CoreAudio 的致命错（StopIOProc/HALPlugIn 失败）
+          if grep -qE 'StopIOProc.*error|HALPlugIn.*error' /tmp/rec.log; then
+            echo "ERROR: 音频链路断了（CoreAudio 报 StopIOProc/HALPlugIn 错误）"
+            exit 1
+          fi
+          echo "OK: 无 CoreAudio 致命错误"
 
 
 

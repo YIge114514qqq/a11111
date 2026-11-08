@@ -35,6 +35,8 @@ final class LiveTranslateSession: ObservableObject {
     private var lastErrorBody = ""
     /// 给人看的当前进度：出问题时能直接看出卡在哪一步
     @Published var status = ""
+    /// 本次已采集到的音频字节数（自检用：为 0 就说明麦克风根本没出声）
+    @Published var audioBytes = 0
 
     // 当前这句话的原文 / 译文
     private var curSource = ""
@@ -82,6 +84,7 @@ final class LiveTranslateSession: ObservableObject {
         isOpen = false
         pendingChunks.removeAll()
         isRecording = true
+        audioBytes = 0
         status = "正在连接服务器…"
         startTicker()
 
@@ -384,7 +387,10 @@ final class LiveTranslateSession: ObservableObject {
             guard let self else { return }
             // 音频回调在别的线程，转发回主线程发 WebSocket
             Task { @MainActor in
-                if self.isRecording { self.sendAudio(chunk) }
+                if self.isRecording {
+                    self.audioBytes += chunk.count
+                    self.sendAudio(chunk)
+                }
             }
         }
         do {

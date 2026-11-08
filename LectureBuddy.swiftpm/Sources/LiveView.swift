@@ -210,7 +210,10 @@ struct LiveView: View {
                     .foregroundStyle(isRecording ? Color.red : Color.secondary)
                 // 录音时写出实际进度：连不上、没权限时一眼能看出卡在哪步
                 if isRecording, showingLive, !live.status.isEmpty {
-                    Text(live.status)
+                    // 带上已采集的音频量：一直为 0 就说明麦克风没出声（格式/会话问题）
+                    Text(live.audioBytes > 0
+                         ? "\(live.status) · 音频 \(live.audioBytes / 1024) KB"
+                         : live.status)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
