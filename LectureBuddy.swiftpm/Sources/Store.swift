@@ -34,7 +34,9 @@ final class AppSettings: ObservableObject {
         notesLanguage = defaults.string(forKey: "notesLanguage") ?? "简体中文"
         showSource = defaults.object(forKey: "showSource") as? Bool ?? true
         dashscopeKey = defaults.string(forKey: "dashscopeKey") ?? ""
-        dashscopeURL = defaults.string(forKey: "dashscopeURL") ?? ""
+        // 默认就填好官方地址：以前这里默认空串，新用户只填 Key 不填地址，
+        // useLiveTranslate 就为 false，点开始直接被拦或走错引擎。
+        dashscopeURL = defaults.string(forKey: "dashscopeURL") ?? "https://dashscope.aliyuncs.com/api/v1"
         asrModel = defaults.string(forKey: "asrModel") ?? "qwen3.5-livetranslate-flash-realtime"
         courseTopic = defaults.string(forKey: "courseTopic") ?? ""
         termsText = defaults.string(forKey: "termsText") ?? ""

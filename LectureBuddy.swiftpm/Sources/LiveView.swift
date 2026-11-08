@@ -12,6 +12,10 @@ struct LiveView: View {
     private var isRecording: Bool { live.isRecording || session.isRecording }
     private var lines: [CaptionLine] { showingLive ? live.lines : session.lines }
     private var elapsed: TimeInterval { showingLive ? live.elapsed : session.elapsed }
+    /// 复制按钮要跟着当前引擎走，否则 DashScope 模式下复制到空字符串
+    private func currentTranscript() -> String {
+        showingLive ? live.transcriptForClipboard() : session.transcriptForClipboard()
+    }
     /// 出错时优先显示端到端引擎的错误：
     /// 否则一 stop()，showingLive 变 false，刚拿到的 401/权限错误就被吞掉，
     /// 用户只看到「一秒就结束、什么都没说」。
@@ -245,7 +249,7 @@ struct LiveView: View {
             HStack(spacing: 10) {
                 primaryButton
                 Button {
-                    UIPasteboard.general.string = session.transcriptForClipboard()
+                    UIPasteboard.general.string = currentTranscript()
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
@@ -297,7 +301,7 @@ struct LiveView: View {
             VStack(alignment: .leading, spacing: 10) {
                 primaryButton
                 Button {
-                    UIPasteboard.general.string = session.transcriptForClipboard()
+                    UIPasteboard.general.string = currentTranscript()
                 } label: {
                     Label("复制双语转写", systemImage: "doc.on.doc")
                         .frame(maxWidth: .infinity)
@@ -314,8 +318,10 @@ struct LiveView: View {
         Button {
             toggleRecording()
         } label: {
-            if session.isRecording {
-                Label("结束并整理笔记", systemImage: "checkmark.circle.fill")
+            // 用 isRecording（含实时翻译模式），不能只看 session.isRecording：
+            // 否则 DashScope 在录时按钮还写「开始记录」，用户会以为没开始，再点一下就结束了。
+            if isRecording {
+                Label(showingLive ? "结束录音" : "结束并整理笔记", systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             } else {
                 Label("开始记录", systemImage: "record.circle")

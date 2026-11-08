@@ -100,6 +100,17 @@ final class LiveTranslateSession: ObservableObject {
         errorMessage = nil
     }
 
+    /// 实时翻译模式的转写文本。以前复制按钮一律读 session 的，
+    /// 但走 DashScope 时字幕在 live.lines 里，复制出来是空的。
+    func transcriptForClipboard() -> String {
+        lines.map { line in
+            if let t = line.translation, !t.isEmpty {
+                return line.text == t ? t : "\(line.text)\n\(t)"
+            }
+            return line.text
+        }.joined(separator: "\n\n")
+    }
+
     /// 关掉录音。故意不用 `guard isRecording else { return }`：
     /// start() 中途失败时 isRecording 已经置 true，这个 guard 会让 UI 卡在录音态；
     /// 而且错误分支调用 stop() 会直接把已录到的字幕丢掉。
@@ -175,8 +186,27 @@ final class LiveTranslateSession: ObservableObject {
     }
 
     private func escape(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-         .replacingOccurrences(of: "\"", with: "\\\"")
+        // 手拼 JSON 就必须把控制字符也转义：术语表里粘进 tab/回车，
+        // 不转义会让整个 session.update JSON 非法，服务端直接忽略配置，
+        // 表现就是“连上了但什么都不翻译”。
+        var out = ""
+        out.reserveCapacity(s.count)
+        for ch in s {
+            switch ch {
+            case "\\": out += "\\\\"
+            case "\"": out += "\\\""
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default:
+                if let ascii = ch.asciiValue, ascii < 0x20 {
+                    out += String(format: "\\u%04x", ascii)
+                } else {
+                    out.append(ch)
+                }
+            }
+        }
+        return out
     }
 
     private func shortLang(_ tag: String) -> String {
@@ -288,10 +318,13 @@ final class LiveTranslateSession: ObservableObject {
             // 等原文追上来再定稿，避免两者错配
             Task { @MainActor in
                 var waited = 0
-                while waited < 15 && self.curSource.isEmpty {
+                // 最多等 1.5 秒；若这期间已经 stop()，就直接放弃，
+                // 否则会往已经清空的字幕里写孤行。
+                while waited < 15 && self.curSource.isEmpty && self.isRecording {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     waited += 1
                 }
+                guard self.isRecording else { return }
                 if !self.curTranslation.isEmpty { self.upsert(final: true) }
             }
 
@@ -415,6 +448,9 @@ final class AudioCapture {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private let onChunk: (Data) -> Void
+    /// 是否同时写 WAV。设置里「同时保存课堂录音」关掉时为 false，
+    /// 只送识别不落盘，省存储。
+    private let saveAudio: Bool
 
     /// 目标格式：16k / 单声道 / 16bit，阿里云要的就是这个
     private let targetFormat: AVAudioFormat?
@@ -429,6 +465,7 @@ final class AudioCapture {
 
     init(onChunk: @escaping (Data) -> Void) {
         self.onChunk = onChunk
+        self.saveAudio = AppSettings.shared.recordAudio
         // 不用 ! 强制解包：构造失败就让调用方报错，而不是崩溃
         self.targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                           sampleRate: 16000,
@@ -451,8 +488,8 @@ final class AudioCapture {
         // 16k 交给下面的 AVAudioConverter 重采样，稳定性比强制硬件采样率好得多。
         try session.setActive(true, options: [])
 
-        // 2. 开录音文件
-        openWav()
+        // 2. 开录音文件（关掉「保存录音」时跳过，不落盘）
+        if saveAudio { openWav() }
 
         // 3. 安装 tap —— 这是最容易崩的地方：
         //    必须用 outputFormat，不能用 inputFormat（两者不一致时会抛 ObjC 异常，Swift try 抓不到）
@@ -511,7 +548,9 @@ final class AudioCapture {
 
         let data = Data(bytes: ptr, count: size)
         onChunk(data)
-        writeQueue.async { [weak self] in self?.writeWav(data) }
+        if saveAudio {
+            writeQueue.async { [weak self] in self?.writeWav(data) }
+        }
     }
 
     private func convert(_ buffer: AVAudioPCMBuffer, to target: AVAudioFormat) -> AVAudioPCMBuffer? {

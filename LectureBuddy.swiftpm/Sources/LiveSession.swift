@@ -176,16 +176,20 @@ final class LiveSession: NSObject, ObservableObject {
             return
         }
 
-        // 录音失败不影响字幕，只是没法回听
-        let name = "lesson-\(Int(Date().timeIntervalSince1970)).m4a"
-        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(name)
-        do {
-            try pump.prepareRecording(to: url, using: format)
-            audioFileName = name
-        } catch {
-            audioFileName = nil
-            errorMessage = LiveSessionError.recordingUnavailable.errorDescription
+        // 录音失败不影响字幕，只是没法回听。
+        // 开关关掉就真的不建文件：以前这个开关只存不读，关了也照录。
+        audioFileName = nil
+        if settings.recordAudio {
+            let name = "lesson-\(Int(Date().timeIntervalSince1970)).m4a"
+            let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent(name)
+            do {
+                try pump.prepareRecording(to: url, using: format)
+                audioFileName = name
+            } catch {
+                audioFileName = nil
+                errorMessage = LiveSessionError.recordingUnavailable.errorDescription
+            }
         }
 
         do {
