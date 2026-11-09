@@ -260,7 +260,9 @@ struct Lesson: Identifiable, Codable, Hashable {
         targetLanguage = try c.decodeIfPresent(String.self, forKey: .targetLanguage) ?? ""
     }
 
-    init() {}
+    init() {
+        title = "未命名课程"
+    }
 
     init(title: String,
          createdAt: Date = Date(),
