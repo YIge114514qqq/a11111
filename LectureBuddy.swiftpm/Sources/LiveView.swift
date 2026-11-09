@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Foundation
 
 struct LiveView: View {
     @EnvironmentObject var settings: AppSettings
@@ -129,7 +130,15 @@ struct LiveView: View {
     private func saveLiveLesson(_ completion: LiveTranslateSession.Completion) {
         guard savedLiveSessionID != completion.id else { return }
         savedLiveSessionID = completion.id
+        // 连不上服务器（401/断网）时只有几秒空录音，没有任何字幕：
+        // 这种不该在课程列表里多出一条空课，也应该把没人用的录音删掉。
         guard !completion.lines.isEmpty || completion.audioFileName != nil else { return }
+        guard !completion.lines.isEmpty else {
+            if let name = completion.audioFileName {
+                try? FileManager.default.removeItem(at: store.audioURL(named: name))
+            }
+            return
+        }
         var lesson = Lesson(
             title: defaultLessonTitle(),
             duration: completion.duration,
