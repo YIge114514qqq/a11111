@@ -154,10 +154,12 @@ final class LessonStore: ObservableObject {
         try? FileManager.default.copyItem(at: fileURL, to: backupURL)
     }
 
-    /// 导出全部课程（含笔记）成一个 JSON 文件，换机/换签名时先存一份
+    /// 导出全部课程（含笔记）成一个 JSON 文件。
+    /// 先写到 Documents（开了文件共享后，「文件」App 里能直接看到），
+    /// 同时给分享面板一份，两条路都能把备份拿出去。
     func exportURL() throws -> URL {
         let data = try JSONEncoder().encode(lessons)
-        let dir = FileManager.default.temporaryDirectory
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let url = dir.appendingPathComponent("LectureBuddy-backup.json")
         try data.write(to: url, options: .atomic)
         return url

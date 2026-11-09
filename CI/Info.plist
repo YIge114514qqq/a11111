@@ -48,5 +48,12 @@
 	<string>需要用语音识别把老师说的话转成文字，才能生成双语字幕和课堂笔记。</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- 开启文件共享：用户能在「文件」App 里看到 Documents 下的
+	     lessons.json / lessons.backup.json / 录音，
+	     换 ipa 或删 App 前能自己拷出来。 -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 </dict>
 </plist>

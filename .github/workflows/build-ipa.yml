@@ -154,6 +154,12 @@ jobs:
             || { echo "ERROR: 缺 NSMicrophoneUsageDescription，点录音会闪退"; exit 1; }
           /usr/libexec/PlistBuddy -c "Print :UILaunchScreen" "$PLIST" > /dev/null \
             || { echo "ERROR: 缺 UILaunchScreen，界面会上下黑边"; exit 1; }
+          # 文件共享关掉的话，用户就看不到沙盒里的 lessons.json 和录音，
+          # 换 ipa / 删 App 前没法自己把数据拷出来。
+          /usr/bin/plutil -extract UIFileSharingEnabled raw "$PLIST" > /dev/null \
+            || { echo "ERROR: 缺 UIFileSharingEnabled，用户无法从「文件」App 取回数据"; exit 1; }
+          /usr/bin/plutil -extract LSSupportsOpeningDocumentsInPlace raw "$PLIST" > /dev/null \
+            || { echo "ERROR: 缺 LSSupportsOpeningDocumentsInPlace"; exit 1; }
           echo "OK: plist 关键项齐全"
 
       - name: Package unsigned IPA
