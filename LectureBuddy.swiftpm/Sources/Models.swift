@@ -6,6 +6,22 @@ struct CaptionLine: Identifiable, Codable, Hashable {
     var translation: String?
     var timestamp: Date = Date()
     var offset: TimeInterval = 0
+
+    init(text: String, translation: String? = nil, offset: TimeInterval = 0) {
+        self.text = text
+        self.translation = translation
+        self.offset = offset
+    }
+
+    /// 旧字幕可能缺 timestamp/id，不能因为一个字段让整节课解不出来
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        translation = try c.decodeIfPresent(String.self, forKey: .translation)
+        timestamp = try c.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
+        offset = try c.decodeIfPresent(TimeInterval.self, forKey: .offset) ?? 0
+    }
 }
 
 struct NoteSection: Identifiable, Codable, Hashable {
@@ -227,6 +243,42 @@ struct Lesson: Identifiable, Codable, Hashable {
     var audioFileName: String?
     var sourceLanguage: String = ""
     var targetLanguage: String = ""
+
+    /// 和 LessonNotes 一样宽容解码：旧文件里若缺 id/createdAt 等字段，
+    /// 不能因为一个字段就整库解不出来（那才是升级后课程全没的原因）。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名课程"
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
+            ?? Date(timeIntervalSince1970: 0)
+        duration = try c.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+        lines = try c.decodeIfPresent([CaptionLine].self, forKey: .lines) ?? []
+        notes = try c.decodeIfPresent(LessonNotes.self, forKey: .notes)
+        audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
+        sourceLanguage = try c.decodeIfPresent(String.self, forKey: .sourceLanguage) ?? ""
+        targetLanguage = try c.decodeIfPresent(String.self, forKey: .targetLanguage) ?? ""
+    }
+
+    init() {}
+
+    init(title: String,
+         createdAt: Date = Date(),
+         duration: TimeInterval = 0,
+         lines: [CaptionLine] = [],
+         notes: LessonNotes? = nil,
+         audioFileName: String? = nil,
+         sourceLanguage: String = "",
+         targetLanguage: String = "") {
+        self.title = title
+        self.createdAt = createdAt
+        self.duration = duration
+        self.lines = lines
+        self.notes = notes
+        self.audioFileName = audioFileName
+        self.sourceLanguage = sourceLanguage
+        self.targetLanguage = targetLanguage
+    }
 
     var transcriptText: String {
         lines.map { line in

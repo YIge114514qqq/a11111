@@ -89,4 +89,18 @@ do {
     fatalError("FAIL: legacy lessons.json no longer decodes: \(error)")
 }
 
+// 更碎的数据：缺 id / createdAt / timestamp 这种也不能整库挂掉
+let sparseJSON = """
+[{"title":"几乎没有字段的课","lines":[{"text":"只有文本"}]}]
+"""
+do {
+    let sparse = try JSONDecoder().decode([Lesson].self, from: Data(sparseJSON.utf8))
+    expect(sparse.count == 1, "sparse lesson decodes")
+    expect(sparse[0].title == "几乎没有字段的课", "sparse title kept")
+    expect(sparse[0].lines.first?.text == "只有文本", "sparse caption kept")
+    expect(sparse[0].id != UUID(uuidString: "00000000-0000-0000-0000-000000000000"), "sparse id generated")
+} catch {
+    fatalError("FAIL: sparse lessons.json must still decode: \(error)")
+}
+
 print("PASS: \(checks) model checks")
