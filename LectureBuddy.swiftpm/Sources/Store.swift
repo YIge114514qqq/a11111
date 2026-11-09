@@ -92,6 +92,9 @@ final class AppSettings: ObservableObject {
 /// 本地保存所有课程，JSON 落在 App 的 Documents 里，不上传任何地方
 final class LessonStore: ObservableObject {
     @Published private(set) var lessons: [Lesson] = []
+    /// 数据文件读不出来时置为 true：此时绝对不能写回，否则会把旧数据覆盖掉
+    @Published private(set) var loadError: String?
+    private var loadedSuccessfully = false
 
     private var fileURL: URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -101,17 +104,79 @@ final class LessonStore: ObservableObject {
     init() { load() }
 
     func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let saved = try? JSONDecoder().decode([Lesson].self, from: data) else {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            // 第一次启动（或者用户删了数据）：空库是正常状态，可以正常写
             lessons = []
+            loadError = nil
+            loadedSuccessfully = true
             return
         }
-        lessons = saved.sorted { $0.createdAt > $1.createdAt }
+        guard let data = try? Data(contentsOf: fileURL) else {
+            markLoadFailed("课程数据文件读不出来")
+            return
+        }
+        do {
+            let saved = try JSONDecoder().decode([Lesson].self, from: data)
+            lessons = saved.sorted { $0.createdAt > $1.createdAt }
+            loadError = nil
+            loadedSuccessfully = true
+        } catch {
+            // 旧版本升级、字段对不上、文件被写坏都会走到这里。
+            // 以前直接设成空数组，下一次保存就把整库覆盖了——这才是真正会
+            // “更新后以前的课都没了”的原因。现在只报告错误，不写回。
+            markLoadFailed("课程数据解析失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func markLoadFailed(_ message: String) {
+        lessons = []
+        loadedSuccessfully = false
+        loadError = message
     }
 
     private func persist() {
+        // 没成功读过就绝不写，避免用空数据覆盖用户原来的课程
+        guard loadedSuccessfully else { return }
         guard let data = try? JSONEncoder().encode(lessons) else { return }
+        // 每次写之前先留一份上一版：万一新版写坏，还能回滚
+        backupCurrentFile()
         try? data.write(to: fileURL, options: .atomic)
+    }
+
+    /// 上一版数据的备份，升级出问题时可以人工救回
+    var backupURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("lessons.backup.json")
+    }
+
+    private func backupCurrentFile() {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        try? FileManager.default.removeItem(at: backupURL)
+        try? FileManager.default.copyItem(at: fileURL, to: backupURL)
+    }
+
+    /// 导出全部课程（含笔记）成一个 JSON 文件，换机/换签名时先存一份
+    func exportURL() throws -> URL {
+        let data = try JSONEncoder().encode(lessons)
+        let dir = FileManager.default.temporaryDirectory
+        let url = dir.appendingPathComponent("LectureBuddy-backup.json")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    /// 导入备份：按 id 合并，不会把现有的课删掉
+    func importLessons(from url: URL) throws {
+        let data = try Data(contentsOf: url)
+        let incoming = try JSONDecoder().decode([Lesson].self, from: data)
+        for lesson in incoming {
+            if let index = lessons.firstIndex(where: { $0.id == lesson.id }) {
+                lessons[index] = lesson
+            } else {
+                lessons.append(lesson)
+            }
+        }
+        lessons.sort { $0.createdAt > $1.createdAt }
+        loadedSuccessfully = true
+        persist()
     }
 
     func save(_ lesson: Lesson) {

@@ -1,12 +1,18 @@
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var store: LessonStore
     @State private var showKey = false
     @State private var testResult: String?
     @State private var testing = false
     @State private var buildingTerms = false
     @State private var termsError: String?
+    @State private var showImporter = false
+    @State private var shareURL: URL?
+    @State private var backupMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -18,9 +24,20 @@ struct SettingsView: View {
                 apiSection
                 languageSection
                 notesSection
+                backupSection
                 aboutSection
             }
             .navigationTitle("设置")
+            .fileImporter(isPresented: $showImporter,
+                          allowedContentTypes: [.json],
+                          allowsMultipleSelection: false) { result in
+                handleImport(result)
+            }
+            .sheet(item: Binding(
+                get: { shareURL.map(ShareFile.init) },
+                set: { if $0 == nil { shareURL = nil } })) { file in
+                ShareSheet(items: [file.url])
+            }
         }
     }
 
@@ -196,6 +213,58 @@ struct SettingsView: View {
         }
     }
 
+    private var backupSection: some View {
+        Section {
+            Button {
+                exportBackup()
+            } label: {
+                Label("导出全部课程备份", systemImage: "square.and.arrow.up")
+            }
+            .disabled(store.lessons.isEmpty)
+
+            Button {
+                showImporter = true
+            } label: {
+                Label("从备份文件导入", systemImage: "square.and.arrow.down")
+            }
+
+            if let backupMessage {
+                Text(backupMessage).font(.footnote).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("换新 IPA / 换机前先备份")
+        } footer: {
+            Text("重装或换签名不会自动保留数据。先导出一份 JSON 存到「文件」里，装完再导入，按课程合并，不会覆盖现有记录。录音文件不会包含在 JSON 里。")
+        }
+    }
+
+    private func exportBackup() {
+        do {
+            let url = try store.exportURL()
+            shareURL = url
+            backupMessage = "已生成备份文件，选择「存储到文件」保存即可。"
+        } catch {
+            backupMessage = "导出失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                try store.importLessons(from: url)
+                backupMessage = "导入完成，共 \(store.lessons.count) 节课。"
+            } catch {
+                backupMessage = "导入失败：\(error.localizedDescription)"
+            }
+        case .failure(let error):
+            backupMessage = "选择文件失败：\(error.localizedDescription)"
+        }
+    }
+
     private var aboutSection: some View {
         Section("关于") {
             LabeledContent("App", value: "LectureBuddy 1.0")
@@ -220,4 +289,20 @@ struct SettingsView: View {
         }
         testing = false
     }
+}
+
+/// 包一层，方便用 .sheet(item:) 弹出分享面板
+struct ShareFile: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

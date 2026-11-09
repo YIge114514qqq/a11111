@@ -15,7 +15,21 @@ struct LibraryView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if store.lessons.isEmpty {
+                if let loadError = store.loadError {
+                    // 数据读不出来时什么都不说就显示空列表，用户会以为课全丢了。
+                    // 这里明确提示，并告诉他在哪里恢复。
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 40)).foregroundStyle(.orange)
+                        Text("课程数据没能读出来").font(.title3.bold())
+                        Text(loadError).font(.footnote).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Text("原始文件没有被覆盖。去「设置 → 从备份文件导入」，选之前导出的 JSON 恢复；也可以先导出备份把现有文件留存。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(24)
+                } else if store.lessons.isEmpty {
                     emptyState
                 } else {
                     lessonList

@@ -39,8 +39,8 @@ struct LessonDetailView: View {
             Picker("", selection: $tab) {
                 Text("笔记").tag(0)
                 Text("转写").tag(1)
-                Text("复习卡").tag(2)
-                Text("术语").tag(3)
+                Text("练习").tag(2)
+                Text("复习卡").tag(3)
                 Text("提问").tag(4)
             }
             .pickerStyle(.segmented)
@@ -59,8 +59,8 @@ struct LessonDetailView: View {
                 switch tab {
                 case 0: notesTab(lesson)
                 case 1: transcriptTab(lesson)
-                case 2: cardsTab(lesson)
-                case 3: glossaryTab(lesson)
+                case 2: practiceTab(lesson)
+                case 3: cardsTab(lesson)
                 default: askTab(lesson)
                 }
             }
@@ -129,20 +129,61 @@ struct LessonDetailView: View {
 
                 if let notes = lesson.notes {
                     if !notes.summary.isEmpty {
-                        block(title: "本节课概述") {
+                        block(title: "一句话说清这节课") {
                             Text(notes.summary).font(.body)
                         }
                     }
-                    ForEach(notes.sections) { section in
-                        block(title: section.title) {
-                            ForEach(Array(section.points.enumerated()), id: \.offset) { _, point in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("•").foregroundStyle(.indigo)
-                                    Text(point).font(.body)
-                                }
+
+                    // 第一层：先看懂骨架。默认展开，后面的细节默认收起。
+                    if !notes.framework.isEmpty {
+                        frameworkBlock(notes.framework)
+                    }
+
+                    // 第二层：再看细节，带上学生的疑问和例子
+                    if !notes.knowledgePoints.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            sectionHeader("二、老师具体怎么讲",
+                                          subtitle: "看懂框架后再看这里，对照老师原话")
+                            ForEach(notes.knowledgePoints) { point in
+                                knowledgeBlock(point)
                             }
                         }
                     }
+
+                    // 第三层：自己动手，才能真吸收
+                    if !notes.practice.isEmpty {
+                        practiceSummary(notes.practice)
+                    }
+
+                    if !notes.sections.isEmpty {
+                        DisclosureGroup {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(notes.sections) { section in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(section.title).font(.subheadline.bold())
+                                        ForEach(Array(section.points.enumerated()), id: \.offset) { _, point in
+                                            HStack(alignment: .top, spacing: 8) {
+                                                Text("•").foregroundStyle(.indigo)
+                                                Text(point).font(.callout)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.top, 6)
+                        } label: {
+                            sectionHeader("三、按课堂顺序的原始章节",
+                                          subtitle: "想回到老师原话时看这里")
+                        }
+                    }
+
+                    if notes.needsRefresh {
+                        HStack(spacing: 8) {
+                            Text("这节课的笔记是旧版本生成的，只有章节要点。")
+                                .font(.footnote).foregroundStyle(.orange)
+                        }
+                    }
+
                     if !notes.cards.isEmpty {
                         Text("已生成 \(notes.cards.count) 张复习卡，去「复习卡」自测。")
                             .font(.footnote)
@@ -204,6 +245,110 @@ struct LessonDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // MARK: - 笔记的新结构
+
+    private func sectionHeader(_ title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.headline).foregroundStyle(.indigo)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// 第一层：大框架。先看到全貌，再往下看细节。
+    private func frameworkBlock(_ framework: Framework) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader("一、先看懂这节课的骨架", subtitle: "看完这一块，就能自己复述这节课在讲什么")
+
+            if !framework.problem.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("这节课要解决的问题").font(.caption.bold()).foregroundStyle(.secondary)
+                    Text(framework.problem).font(.body)
+                }
+            }
+
+            if !framework.bigPicture.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("主线").font(.caption.bold()).foregroundStyle(.secondary)
+                    Text(framework.bigPicture).font(.body)
+                }
+            }
+
+            if !framework.flow.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("怎么一步步展开").font(.caption.bold()).foregroundStyle(.secondary)
+                    ForEach(Array(framework.flow.enumerated()), id: \.element.id) { index, item in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(index + 1)")
+                                .font(.caption.bold())
+                                .frame(width: 22, height: 22)
+                                .background(Color.indigo.opacity(0.25), in: Circle())
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.title).font(.subheadline.bold())
+                                if !item.role.isEmpty {
+                                    Text(item.role).font(.callout).foregroundStyle(.secondary)
+                                }
+                                if !item.keyPoints.isEmpty {
+                                    Text(item.keyPoints.joined(separator: " · "))
+                                        .font(.caption).foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.indigo.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    /// 第二层：知识点 = 老师怎么讲 + 学生容易卡在哪 + 具体例子
+    private func knowledgeBlock(_ point: KnowledgePoint) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(point.title).font(.subheadline.bold())
+            if !point.detail.isEmpty {
+                Text(point.detail).font(.callout).foregroundStyle(.secondary)
+            }
+            if !point.confusion.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "questionmark.circle").font(.caption)
+                    Text(point.confusion).font(.callout)
+                }
+                .foregroundStyle(.orange)
+            }
+            if !point.example.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("举个例子").font(.caption.bold()).foregroundStyle(.indigo)
+                    Text(point.example).font(.callout)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// 第三层：练习入口，具体做题在「练习」页
+    private func practiceSummary(_ practice: PracticeSet) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("三、自己动手，才算真学会", subtitle: "先自己做，再对答案")
+            Text("概念快测 \(practice.quickChecks.count) 题 · 综合题 \(practice.problems.count) 道")
+                .font(.callout)
+            Button {
+                tab = 5
+            } label: {
+                Label("去做练习", systemImage: "pencil.and.list.clipboard")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.indigo)
+            .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - 转写
@@ -275,6 +420,67 @@ struct LessonDetailView: View {
         player?.play()
         playing = true
     }
+    // MARK: - 练习
+
+    private func practiceTab(_ lesson: Lesson) -> some View {
+        Group {
+            if let practice = lesson.notes?.practice, !practice.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("先自己做，再看答案").font(.headline)
+                            Text("做错的题才是真正要回头再看笔记的地方。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+
+                        if !practice.quickChecks.isEmpty {
+                            exerciseGroup(title: "概念快测",
+                                          subtitle: "看到题先在脑子里答一句，再展开",
+                                          items: practice.quickChecks)
+                        }
+                        if !practice.problems.isEmpty {
+                            exerciseGroup(title: "综合题",
+                                          subtitle: "拿纸笔写，再对照答案和讲解",
+                                          items: practice.problems)
+                        }
+
+                        if let glossary = lesson.notes?.glossary, !glossary.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("这节课的术语").font(.headline)
+                                ForEach(glossary) { item in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Text(item.term).font(.callout.bold())
+                                        Text(item.explain).font(.callout).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(20)
+                }
+            } else {
+                emptyHint(
+                    "还没有练习题",
+                    (lesson.notes?.needsRefresh ?? false)
+                        ? "这节课的笔记是旧版本生成的，去笔记页点「重新生成笔记」就会有练习。"
+                        : "先在笔记页生成笔记，会自动附上概念快测和综合题。"
+                )
+            }
+        }
+    }
+
+    private func exerciseGroup(title: String, subtitle: String, items: [ExerciseItem]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline).foregroundStyle(.indigo)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                ExerciseCard(index: index + 1, item: item)
+            }
+        }
+    }
+
     // MARK: - 复习卡
 
     private func cardsTab(_ lesson: Lesson) -> some View {
@@ -310,22 +516,6 @@ struct LessonDetailView: View {
         }
     }
 
-    private func glossaryTab(_ lesson: Lesson) -> some View {
-        Group {
-            if let notes = lesson.notes, !notes.glossary.isEmpty {
-                List(notes.glossary) { item in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.term).font(.headline)
-                        Text(item.explain).font(.callout).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 2)
-                }
-                .listStyle(.insetGrouped)
-            } else {
-                emptyHint("还没有术语表", "生成笔记后会自动提炼这节课的专业词")
-            }
-        }
-    }
 
     // MARK: - 提问
 
@@ -417,5 +607,56 @@ struct LessonDetailView: View {
             }
         }
         return out
+    }
+}
+/// 一道练习题：默认只给题，答案和讲解点开才看，逼学生先自己答
+struct ExerciseCard: View {
+    let index: Int
+    let item: ExerciseItem
+    @State private var revealed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Text("\(index).")
+                    .font(.subheadline.bold().monospacedDigit())
+                    .foregroundStyle(.indigo)
+                Text(item.question).font(.body)
+            }
+
+            if revealed {
+                if !item.answer.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("答案").font(.caption.bold()).foregroundStyle(.green)
+                        Text(item.answer).font(.callout)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !item.explanation.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("讲解").font(.caption.bold()).foregroundStyle(.orange)
+                        Text(item.explanation).font(.callout).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if item.answer.isEmpty && item.explanation.isEmpty {
+                    Text("这道题没有附答案，去「提问」页问这节课的助教。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { revealed.toggle() }
+            } label: {
+                Label(revealed ? "收起" : "看答案和讲解",
+                      systemImage: revealed ? "chevron.up" : "chevron.down")
+                    .font(.footnote)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

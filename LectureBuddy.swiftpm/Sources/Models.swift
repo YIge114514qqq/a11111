@@ -14,6 +14,75 @@ struct NoteSection: Identifiable, Codable, Hashable {
     var points: [String] = []
 }
 
+/// 课堂的大框架：先让学生看懂这节课在讲什么、怎么串起来的，再去看细节
+struct FrameworkItem: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
+    var title: String
+    /// 一句话讲清楚这一环在整节课里的作用
+    var role: String = ""
+    /// 这一环里的关键点（对应后面章节的细节）
+    var keyPoints: [String] = []
+}
+
+struct Framework: Codable, Hashable {
+    /// 3-5 句说清这节课的主线，学生读完能自己复述
+    var bigPicture: String = ""
+    /// 按顺序串起来的环节
+    var flow: [FrameworkItem] = []
+    /// 这节课到底想解决什么问题
+    var problem: String = ""
+    var isEmpty: Bool { bigPicture.isEmpty && flow.isEmpty }
+}
+
+/// 老师讲的知识点，配上学生自己会遇到的疑问和具体例子
+struct KnowledgePoint: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
+    var title: String
+    /// 老师的原话要点（保留课上细节）
+    var detail: String = ""
+    /// 学生最容易卡住的疑问，用问句
+    var confusion: String = ""
+    /// 结合课上内容的举例/类比，要具体
+    var example: String = ""
+    var isEmpty: Bool { title.isEmpty }
+}
+
+/// 一道练习：答案和讲解分开，方便先自己做再看
+struct ExerciseItem: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
+    var question: String
+    var answer: String = ""
+    /// 讲解：为什么是这个答案、常见错法在哪
+    var explanation: String = ""
+}
+
+/// 课后自测：优先考“能不能用这节课的思路解题”，而不是背原话
+struct PracticeSet: Codable, Hashable {
+    /// 短题，用来快速确认概念有没有接上
+    var quickChecks: [ExerciseItem] = []
+    /// 动笔的综合题
+    var problems: [ExerciseItem] = []
+    var isEmpty: Bool { quickChecks.isEmpty && problems.isEmpty }
+
+    /// 模型给的练习数组可能缺字段、也可能是纯字符串，尽量宽容地接住
+    static func parseItems(_ raw: Any?) -> [ExerciseItem] {
+        guard let list = raw as? [Any] else { return [] }
+        return list.compactMap { element -> ExerciseItem? in
+            if let text = element as? String {
+                let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return q.isEmpty ? nil : ExerciseItem(question: q)
+            }
+            guard let item = element as? [String: Any] else { return nil }
+            let q = (item["question"] as? String) ?? (item["q"] as? String) ?? ""
+            guard !q.isEmpty else { return nil }
+            return ExerciseItem(
+                question: q,
+                answer: (item["answer"] as? String) ?? (item["a"] as? String) ?? "",
+                explanation: (item["explanation"] as? String) ?? (item["explain"] as? String) ?? "")
+        }
+    }
+}
+
 struct StudyCard: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var question: String
@@ -32,9 +101,37 @@ struct LessonNotes: Codable, Hashable {
     var cards: [StudyCard] = []
     var glossary: [GlossaryItem] = []
     var generatedAt: Date = Date()
+    /// 先看大局：这节课的骨架
+    var framework: Framework = Framework()
+    /// 再看细节：老师讲的点 + 学生的疑问 + 具体例子
+    var knowledgePoints: [KnowledgePoint] = []
+    /// 最后自测
+    var practice: PracticeSet = PracticeSet()
+
+    /// 手写解码：旧版本存下来的 lessons.json 没有新字段，
+    /// 用默认值补齐，否则升级 App 后所有历史笔记都会解析失败。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        sections = try c.decodeIfPresent([NoteSection].self, forKey: .sections) ?? []
+        cards = try c.decodeIfPresent([StudyCard].self, forKey: .cards) ?? []
+        glossary = try c.decodeIfPresent([GlossaryItem].self, forKey: .glossary) ?? []
+        generatedAt = try c.decodeIfPresent(Date.self, forKey: .generatedAt) ?? Date()
+        framework = try c.decodeIfPresent(Framework.self, forKey: .framework) ?? Framework()
+        knowledgePoints = try c.decodeIfPresent([KnowledgePoint].self, forKey: .knowledgePoints) ?? []
+        practice = try c.decodeIfPresent(PracticeSet.self, forKey: .practice) ?? PracticeSet()
+    }
+
+    init() {}
 
     var isEmpty: Bool {
         summary.isEmpty && sections.isEmpty && cards.isEmpty
+            && framework.isEmpty && knowledgePoints.isEmpty && practice.isEmpty
+    }
+
+    /// 是否只有旧版数据（方便界面提示“可以重新生成更完整的笔记”）
+    var needsRefresh: Bool {
+        framework.isEmpty && knowledgePoints.isEmpty && practice.isEmpty
     }
 
     /// 宽容地解析模型返回的 JSON（可能带 ```json 围栏或前后废话）
@@ -73,6 +170,40 @@ struct LessonNotes: Codable, Hashable {
                 let explain = (item["explain"] as? String) ?? (item["meaning"] as? String) ?? ""
                 return GlossaryItem(term: term, explain: explain)
             }
+        }
+
+        // 1) 大框架：先讲清主线
+        if let fw = obj["framework"] as? [String: Any] {
+            notes.framework.bigPicture = (fw["bigPicture"] as? String)
+                ?? (fw["big_picture"] as? String) ?? ""
+            notes.framework.problem = (fw["problem"] as? String) ?? ""
+            let flow = (fw["flow"] as? [[String: Any]]) ?? (fw["steps"] as? [[String: Any]]) ?? []
+            notes.framework.flow = flow.compactMap { item in
+                guard let title = item["title"] as? String, !title.isEmpty else { return nil }
+                let points = (item["keyPoints"] as? [Any])?.compactMap { $0 as? String }
+                    ?? (item["key_points"] as? [Any])?.compactMap { $0 as? String } ?? []
+                return FrameworkItem(title: title,
+                                     role: (item["role"] as? String) ?? "",
+                                     keyPoints: points)
+            }
+        }
+
+        // 2) 细节：知识点 + 疑问 + 例子
+        if let points = obj["knowledgePoints"] as? [[String: Any]] {
+            notes.knowledgePoints = points.compactMap { item in
+                guard let title = item["title"] as? String, !title.isEmpty else { return nil }
+                return KnowledgePoint(
+                    title: title,
+                    detail: (item["detail"] as? String) ?? "",
+                    confusion: (item["confusion"] as? String) ?? "",
+                    example: (item["example"] as? String) ?? "")
+            }
+        }
+
+        // 3) 练习
+        if let p = obj["practice"] as? [String: Any] {
+            notes.practice.quickChecks = PracticeSet.parseItems(p["quickChecks"] ?? p["quick_checks"])
+            notes.practice.problems = PracticeSet.parseItems(p["problems"] ?? p["longQuestions"])
         }
 
         return notes.isEmpty ? nil : notes

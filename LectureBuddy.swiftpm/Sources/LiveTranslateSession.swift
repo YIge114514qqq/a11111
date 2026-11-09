@@ -43,6 +43,10 @@ final class LiveTranslateSession: ObservableObject {
     /// 没连通前先缓存的音频块，连通后再补发
     private var pendingChunks: [Data] = []
     private let maxPending = 200
+    /// 等合帧后再发的小块（降低每帧开销）
+    private var outBuffer: [Data] = []
+    private var flushTask: Task<Void, Never>?
+    private var audioFramesSent = 0
     /// 服务端在关闭连接前发回的原始错误（如鉴权失败），报真正原因而不是笼统的「连接断开」
     private var lastErrorBody = ""
     /// 给人看的当前进度：出问题时能直接看出卡在哪一步
@@ -106,6 +110,10 @@ final class LiveTranslateSession: ObservableObject {
         elapsed = 0
         isOpen = false
         pendingChunks.removeAll()
+        outBuffer.removeAll()
+        flushTask?.cancel()
+        flushTask = nil
+        audioFramesSent = 0
         isRecording = true
         audioBytes = 0
         status = "正在连接服务器…"
@@ -189,6 +197,8 @@ final class LiveTranslateSession: ObservableObject {
         savedAudioName = capture?.fileName
         capture = nil
         let id = sessionID
+        // 先把合并缓冲里剩下的音频发出去，再结束，否则最后几十毫秒会被丢掉
+        flushAudio()
         if isOpen { send(#"{"event_id":"\#(nextID())","type":"session.finish"}"#) }
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -306,8 +316,36 @@ final class LiveTranslateSession: ObservableObject {
             while pendingChunks.count > maxPending { pendingChunks.removeFirst() }
             return
         }
-        let b64 = data.base64EncodedString()
+        // 两个 tap 回调（约 20-40ms 一块）合并成一帧再发，
+        // 减少 JSON/base64 构造和主线程切换的次数，延迟反而更低。
+        if outBuffer.isEmpty {
+            scheduleFlush()
+        }
+        outBuffer.append(data)
+        if outBuffer.count >= 3 { flushAudio() }
+    }
+
+    private func scheduleFlush() {
+        flushTask?.cancel()
+        flushTask = Task { @MainActor [weak self] in
+            // 40ms 一帧：足够快，又不会把每块都单独打包。
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            self?.flushAudio()
+        }
+    }
+
+    private func flushAudio() {
+        flushTask?.cancel()
+        flushTask = nil
+        guard isOpen, !outBuffer.isEmpty else { return }
+        var merged = Data()
+        merged.reserveCapacity(outBuffer.reduce(0) { $0 + $1.count })
+        for chunk in outBuffer { merged.append(chunk) }
+        let count = outBuffer.count
+        outBuffer.removeAll(keepingCapacity: true)
+        let b64 = merged.base64EncodedString()
         send("{\"event_id\":\"\(nextID())\",\"type\":\"input_audio_buffer.append\",\"audio\":\"\(b64)\"}")
+        audioFramesSent += count
     }
 
     /// 握手完成：发配置并补发缓冲音频

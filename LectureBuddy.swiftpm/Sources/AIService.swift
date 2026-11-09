@@ -11,7 +11,7 @@ enum AIError: LocalizedError {
     case http(Int, String)
     case empty
     case badFormat
-    case courseTooLong
+
 
     var errorDescription: String? {
         switch self {
@@ -25,8 +25,6 @@ enum AIError: LocalizedError {
             return "接口没有返回内容。"
         case .badFormat:
             return "返回格式看不懂，可以重试一次。"
-        case .courseTooLong:
-            return "课堂内容超过 24000 字符，暂时无法完整生成笔记或回答问题。为避免遗漏内容，本次未发送请求；请使用较短的课程记录。"
         }
     }
 }
@@ -129,47 +127,131 @@ struct AIService {
     }
 
     func generateNotes(transcript: String, language: String) async throws -> LessonNotes {
-        guard transcript.count <= 24000 else { throw AIError.courseTooLong }
+        // 长课不再直接报错：先分段提炼，再用提炼结果生成完整笔记。
+        // 一节课两三个小时很常见，直接截断会丢掉后半节课。
+        let material = transcript.count <= 24000
+            ? transcript
+            : try await condense(transcript, language: language)
         let system = """
-        你是留学生的学习助教。根据课堂转写整理复习资料，输出语言为\(language)。
+        你是坐在学生旁边、帮他把课上内容真正学懂的助教。输出语言：\(language)。
+
+        【最重要的原则】学生先要能看懂这节课的骨架，然后才看细节。
+        所以不要一上来就罗列细节，不要只把老师的话换个说法复述。
+        你的任务是：把课听成一条清楚的主线 → 再展开老师怎么讲这条主线 → 再给出自己的分析、举例和练习。
+
         只输出一个 JSON 对象，字段固定为：
-        {"summary": "整节课 3-5 句概述",
-         "sections": [{"title": "章节标题", "points": ["要点"]}],
-         "cards": [{"question": "复习问题", "answer": "答案"}],
-         "glossary": [{"term": "术语原文", "explain": "中文解释"}]}
-        要求：sections 按讲课顺序划分，每节 2-5 个要点；cards 输出 5-8 张，问题要能直接用来考前自测；
-        glossary 只收这门课的专业术语。不要输出 JSON 以外的任何文字。
+        {
+          "summary": "整节课 3-5 句概述，说清讲什么、为什么重要",
+          "framework": {
+            "problem": "这节课到底想解决什么问题（1-2 句）",
+            "bigPicture": "不看细节也能听懂的主线：3-5 句，按因果/递进串起来，学生读完能自己复述",
+            "flow": [{"title": "第一环名称", "role": "它在整节课里的作用（1 句）", "keyPoints": ["这一环的关键点"]}]
+          },
+          "knowledgePoints": [{"title": "知识点名称", "detail": "老师实际怎么讲的（保留原话要点）", "confusion": "学生最容易卡住的疑问（用问句）", "example": "一个具体例子或类比，最好直接用课上讲过的"}],
+          "practice": {
+            "quickChecks": [{"question": "概念快测（能一句话回答）", "answer": "答案", "explanation": "为什么，以及最常见的错法"}],
+            "problems": [{"question": "需要动笔的综合题，考能不能用这节课的思路解题", "answer": "参考答案（分步骤）", "explanation": "解题思路点评"}]
+          },
+          "glossary": [{"term": "术语原文", "explain": "中文解释"}],
+          "cards": [{"question": "考前自测问题", "answer": "答案"}],
+          "sections": [{"title": "按讲课顺序的章节", "points": ["要点"]}]
+        }
+
+        【质量要求】
+        1. framework.flow 要按讲课顺序，3-6 环；每环的 role 必须说明它为什么接在前一环后面。
+        2. knowledgePoints 只收真正重要的点，3-8 个；detail 写老师说的关键内容，不要空话。
+        3. confusion 和 example 必须基于这节课的实际内容；不要写“多练习就会了”这种空话。
+        4. quickChecks 出 4-6 题，problems 出 2-3 题；答案和讲解分开写。
+        5. sections 保留原有结构，作为回到课堂原始细节的索引。
+        6. 所有内容必须来自转写稿，不要编造老师没讲的知识点。
+        7. 不要输出 JSON 以外的任何文字。
         """
         let answer = try await complete(messages: [
             ChatMessage(role: "system", content: system),
-            ChatMessage(role: "user", content: transcript)
+            ChatMessage(role: "user", content: material)
         ], temperature: 0.3)
         if let notes = LessonNotes.parse(from: answer) { return notes }
         return LessonNotes.fallback(from: answer)
+    }
+
+    /// 长课分块提炼：每块单独压缩成要点，再把要点串起来给主笔记用。
+    /// 块之间保留「第几块」标记，避免模型把前后段搞混。
+    private func condense(_ transcript: String, language: String) async throws -> String {
+        let chunkSize = 8000
+        var chunks: [String] = []
+        var start = transcript.startIndex
+        while start < transcript.endIndex {
+            let end = transcript.index(start, offsetBy: chunkSize, limitedBy: transcript.endIndex)
+                ?? transcript.endIndex
+            // 尽量在换行处断开，不把一句话切成两半
+            let slice = transcript[start..<end]
+            if end == transcript.endIndex {
+                chunks.append(String(slice))
+                break
+            }
+            let cut = slice.lastIndex(of: "\n") ?? slice.index(before: end)
+            chunks.append(String(transcript[start..<cut]))
+            start = transcript.index(after: cut)
+        }
+        guard chunks.count > 1 else { return transcript }
+
+        let system = """
+        你在帮学生整理一节很长的课。把下面的片段压成要点，输出语言：\(language)。
+        保留：老师讲的定义、推导、例子、强调的结论。
+        丢掉：口头禅、重复、无关闲聊。
+        只输出要点列表，不要前言。
+        """
+
+        var parts: [String] = []
+        for (index, chunk) in chunks.enumerated() {
+            let answer = try await complete(messages: [
+                ChatMessage(role: "system", content: system),
+                ChatMessage(role: "user", content: "第 \(index + 1)/\(chunks.count) 段：\n" + chunk)
+            ], temperature: 0.2)
+            parts.append("【第 \(index + 1) 段要点】\n" + answer)
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     func ask(question: String, lesson: Lesson) async throws -> String {
         var context = lesson.transcriptText
         if let notes = lesson.notes {
             context += "\n\n【已整理的课堂笔记】\n" + notes.summary
+            if !notes.framework.isEmpty {
+                context += "\n\n【课程主线】\n" + notes.framework.bigPicture
+                if !notes.framework.problem.isEmpty {
+                    context += "\n要解决的问题：" + notes.framework.problem
+                }
+                let flow = notes.framework.flow.map { $0.title }.joined(separator: " → ")
+                if !flow.isEmpty { context += "\n结构：" + flow }
+            }
+            for point in notes.knowledgePoints {
+                context += "\n" + point.title + "：" + point.detail
+            }
             for section in notes.sections {
                 context += "\n" + section.title + "：" + section.points.joined(separator: "；")
             }
         }
-        guard context.count <= 24000 else { throw AIError.courseTooLong }
+        // 提问时允许用整节课的内容；过长就保留前面部分并注明，而不是直接报错。
+        var questionContext = context
+        if questionContext.count > 24000 {
+            questionContext = String(questionContext.prefix(24000))
+                + "\n\n（课堂内容过长，以上为前面部分；涉及后面的内容请重新生成笔记后再问。）"
+        }
         let system = """
         你是留学生的课堂助教。只根据下面这节课的内容回答，找不到依据就说"这节课没讲到"。
         回答按这个顺序组织，用中文写：
-        1. 一句话结论。
-        2. 老师原话怎么说的（引一句）。
-        3. 用大白话解释清楚。
-        4. 举一个具体例子或类比，让学生真正听懂（这一条不能省）。
-        5. 如果这是个容易混淆的难点，指出易错点。
+        1. 先定位：这个问题在整节课的框架里属于哪一环（一句话）。
+        2. 一句话结论。
+        3. 老师原话怎么说的（引一句）。
+        4. 用大白话解释清楚。
+        5. 举一个具体例子或类比，最好直接用课上讲过的（这一条不能省）。
+        6. 如果这是个容易混淆的难点，指出易错点。
         语言要像学长给学妹讲题，直接、有耐心，不要堆术语。
         """
         return try await complete(messages: [
             ChatMessage(role: "system", content: system),
-            ChatMessage(role: "user", content: "【课堂内容】\n" + context + "\n\n【问题】\n" + question)
+            ChatMessage(role: "user", content: "【课堂内容】\n" + questionContext + "\n\n【问题】\n" + question)
         ], temperature: 0.3)
     }
 
