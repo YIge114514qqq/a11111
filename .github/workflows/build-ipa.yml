@@ -16,6 +16,13 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Run deterministic model tests
+        run: |
+          set -euo pipefail
+          mkdir -p build-tests
+          swiftc LectureBuddy.swiftpm/Sources/Models.swift CI/Tests/main.swift -o build-tests/model-tests
+          build-tests/model-tests
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -62,7 +69,7 @@ jobs:
 
       - name: Run in simulator and screenshot
         run: |
-          set -x
+          set -euxo pipefail
           APP="$PWD/build-sim/Debug-iphonesimulator/LectureBuddy.app"
           test -d "$APP" || { echo "模拟器 app 未生成"; find build-sim -name '*.app'; exit 1; }
 
@@ -72,33 +79,26 @@ jobs:
           xcrun simctl bootstatus "$DEV" -b
 
           xcrun simctl install "$DEV" "$APP"
-          xcrun simctl launch "$DEV" com.lecturebuddy.app || echo "launch failed (可能因缺签名)"
+          xcrun simctl launch "$DEV" com.lecturebuddy.app
           sleep 6
 
           xcrun simctl io "$DEV" screenshot /tmp/shot1.png
           cp /tmp/shot1.png "$PWD/sim-screenshot-1.png" || true
 
-          # 截整个模拟器屏幕总是全尺寸，测不出兼容模式。
-          # 改用 App 自报的 scene 尺寸：兼容模式下 iOS 把窗口封在 375x667pt（上下黑边）。
-          xcrun simctl spawn "$DEV" log show --last 60s --predicate 'process == "LectureBuddy"' > /tmp/app.log 2>&1 || true
-          grep -iE 'bounds|window|scene|compat|LaunchScreen' /tmp/app.log | head -20 || true
-          SIZE=$(grep -oE '(375|390|393|402|430|440)x(667|812|844|852|874|932|956)' /tmp/app.log | sort -u | paste -sd ' ' -)
-          echo "App 窗口尺寸候选: $SIZE"
-          if echo "$SIZE" | grep -q '375x667'; then
-            echo "ERROR: 检测到 375x667，App 运行在兼容模式（上下黑边）"
-            exit 1
-          fi
-          echo "OK: 未检测到兼容模式"
+          # 截图仅供人工检查布局；没有窗口日志不能证明没有兼容模式。
+          xcrun simctl spawn "$DEV" launchctl list > /tmp/app-processes.txt
+          awk '$1 ~ /^[0-9]+$/ && /com\.lecturebuddy\.app/ { found=1 } END { exit !found }' /tmp/app-processes.txt \
+            || { echo "ERROR: App 进程已退出"; exit 1; }
 
-      - name: Smoke test - tap record and watch state machine
+      - name: Smoke test - debug autostart and process survival
         run: |
-          set -x
+          set -euxo pipefail
           DEV=$(xcrun simctl list devices available | grep -m1 'iPhone 16 Pro Max' | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
           # 预置权限，否则自动化会被系统弹窗拦住，测不到录音逻辑。
           xcrun simctl privacy "$DEV" grant microphone com.lecturebuddy.app || true
           xcrun simctl privacy "$DEV" grant speech-recognition com.lecturebuddy.app || true
 
-          # 预置一个假 Key，专门测「点开始后会不会一秒被踢回」这个状态机。
+          # 假 Key 仅用于启动/存活冒烟检查，不验证录音状态或远端服务。
           # 假 Key 必被服务端拒绝，所以不用真凭据也不会泄露。
           DATA=$(xcrun simctl get_app_container "$DEV" com.lecturebuddy.app data)
           PLIST="$DATA/Library/Preferences/com.lecturebuddy.app.plist"
@@ -114,29 +114,22 @@ jobs:
           xcrun simctl terminate "$DEV" com.lecturebuddy.app || true
           # -autostart 是仅用于自动化的调试开关：App 启动后自己点一次“开始记录”
           xcrun simctl launch "$DEV" com.lecturebuddy.app -autostart YES
-          # 等久一点：要完整走过握手 + 采集几秒音频才能判断链路
+          # 留出启动时间；存活并不代表音频采集或握手成功。
           sleep 12
 
           xcrun simctl io "$DEV" screenshot /tmp/rec.png
           cp /tmp/rec.png "$PWD/sim-screenshot-recording.png" || true
-          echo "--- 启动 8 秒后的截图已抓 ---"
+          echo "--- 启动 12 秒后的截图已抓 ---"
 
           xcrun simctl spawn "$DEV" log show --last 30s --predicate 'process == "LectureBuddy"' > /tmp/rec.log 2>&1 || true
           grep -iE 'error|websocket|dashscope|status' /tmp/rec.log | tail -40 || true
 
           echo "--- 检查 App 是否仍在运行 ---"
-          xcrun simctl spawn "$DEV" launchctl list 2>/dev/null | grep -i lecturebuddy || echo "未在进程列表（可能已退出）"
+          xcrun simctl spawn "$DEV" launchctl list > /tmp/record-processes.txt
+          awk '$1 ~ /^[0-9]+$/ && /com\.lecturebuddy\.app/ { found=1 } END { exit !found }' /tmp/record-processes.txt \
+            || { echo "ERROR: App 进程已退出"; exit 1; }
 
-          # 音频自检：无头模拟器没有音频输入设备，StopIOProc 会报 "(!dev)"，
-          # 这是环境限制不是 App 的 bug。把这类已知无害行排除后再看有没有真故障。
-          REAL_ERR=$(grep -E 'StopIOProc.*error|HALPlugIn.*error' /tmp/rec.log \
-                     | grep -v '(!dev)' | grep -v '560227702' || true)
-          if [ -n "$REAL_ERR" ]; then
-            echo "ERROR: 音频链路断了："
-            echo "$REAL_ERR"
-            exit 1
-          fi
-          echo "OK: 无 CoreAudio 致命错误（无音频设备的 (!dev) 已忽略）"
+          echo "OK: App 启动后仍在运行。日志和截图仅供诊断；未验证音频采集、录音状态或服务连接。"
 
 
 

@@ -19,6 +19,18 @@ final class LiveTranslateSession: ObservableObject {
     @Published var elapsed: TimeInterval = 0
     /// 停止后能拿到的录音文件名（WAV）
     @Published var savedAudioName: String?
+    struct Completion {
+        let id: UUID
+        let lines: [CaptionLine]
+        let duration: TimeInterval
+        let audioFileName: String?
+    }
+    @Published private(set) var completion: Completion?
+    @Published private(set) var isStarting = false
+    @Published private(set) var isStopping = false
+    private var sessionID = UUID()
+    /// 电话/其他 App 抢走音频时也要收尾保存，否则整节课会静默中断
+    private var interruptionObserver: NSObjectProtocol?
 
     private var socket: URLSessionWebSocketTask?
     private var capture: AudioCapture?
@@ -48,7 +60,11 @@ final class LiveTranslateSession: ObservableObject {
     // MARK: - 对外接口
 
     func start() async {
-        guard !isRecording else { return }
+        guard !isRecording, !isStarting, !isStopping else { return }
+        isStarting = true
+        let id = UUID()
+        sessionID = id
+        defer { if sessionID == id { isStarting = false } }
         errorMessage = nil
 
         let settings = AppSettings.shared
@@ -59,6 +75,7 @@ final class LiveTranslateSession: ObservableObject {
 
         // 1. 麦克风权限
         let granted = await requestMic()
+        guard sessionID == id, isStarting else { return }
         guard granted else {
             errorMessage = "没有麦克风权限，去「设置 → LectureBuddy」里打开"
             return
@@ -79,6 +96,12 @@ final class LiveTranslateSession: ObservableObject {
         let task = session.webSocketTask(with: request)
         socket = task
 
+        lines = []
+        curSource = ""
+        curTranslation = ""
+        liveID = nil
+        savedAudioName = nil
+        lastErrorBody = ""
         startedAt = Date()
         elapsed = 0
         isOpen = false
@@ -93,6 +116,32 @@ final class LiveTranslateSession: ObservableObject {
         task.resume()
         receiveLoop(task)
         startCapture()
+        observeInterruptions()
+    }
+
+    /// 电话、闹钟或别的 App 抢走音频时，麦克风会被系统停掉但 WebSocket 还开着，
+    /// 看起来像「录音中」，其实再也没有字幕。收到中断就立刻收尾并保存。
+    private func observeInterruptions() {
+        removeInterruptionObserver()
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main) { [weak self] note in
+                guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+                Task { @MainActor in
+                    guard let self, self.isRecording else { return }
+                    self.errorMessage = "音频被电话或其它 App 打断，已自动结束并保存这节课。"
+                    self.stop()
+                }
+            }
+    }
+
+    private func removeInterruptionObserver() {
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
+        interruptionObserver = nil
     }
 
     /// 用户手动清掉错误提示
@@ -115,19 +164,49 @@ final class LiveTranslateSession: ObservableObject {
     /// start() 中途失败时 isRecording 已经置 true，这个 guard 会让 UI 卡在录音态；
     /// 而且错误分支调用 stop() 会直接把已录到的字幕丢掉。
     func stop() {
-        if capture == nil && socket == nil && !isRecording { return }
+        if isStarting && !isRecording {
+            // 还在连服务器/等权限时被取消：没有音频也没有字幕，
+            // 但要保证把已经建好的 socket / capture 拆干净，否则下一节会撞车。
+            isStarting = false
+            capture?.stop()
+            capture = nil
+            socket?.cancel(with: .normalClosure, reason: nil)
+            socket = nil
+            isOpen = false
+            pendingChunks.removeAll()
+            status = ""
+            removeInterruptionObserver()
+            sessionID = UUID()
+            return
+        }
+        guard !isStopping, isRecording || capture != nil || socket != nil else { return }
+        isStopping = true
         isRecording = false
+        elapsed = Date().timeIntervalSince(startedAt)
         ticker?.invalidate()
         ticker = nil
-        savedAudioName = capture?.fileName
         capture?.stop()
+        savedAudioName = capture?.fileName
         capture = nil
+        let id = sessionID
+        if isOpen { send(#"{"event_id":"\#(nextID())","type":"session.finish"}"#) }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            self?.completeSession(id)
+        }
+    }
+
+    private func completeSession(_ id: UUID) {
+        guard sessionID == id, isStopping else { return }
+        socket?.cancel(with: .normalClosure, reason: nil)
+        socket = nil
         isOpen = false
         pendingChunks.removeAll()
         status = ""
-        send(#"{"event_id":"\#(nextID())","type":"session.finish"}"#)
-        socket?.cancel(with: .normalClosure, reason: nil)
-        socket = nil
+        removeInterruptionObserver()
+        completion = Completion(id: id, lines: lines, duration: elapsed, audioFileName: savedAudioName)
+        isStopping = false
+        sessionID = UUID()
     }
 
     // MARK: - URL
@@ -242,33 +321,37 @@ final class LiveTranslateSession: ObservableObject {
         let queued = pendingChunks
         pendingChunks.removeAll()
         for chunk in queued { sendAudio(chunk) }
+        if isStopping { send(#"{"event_id":"\#(nextID())","type":"session.finish"}"#) }
     }
 
     /// 用 async 循环收消息：比递归 receive 更稳，也不会堆栈溢出
     private func receiveLoop(_ task: URLSessionWebSocketTask) {
-        // 不用 [weak self]：循环在 stop() 后立即退出，不会长期持有
+        let id = sessionID
+        // 停止时继续收尾帧；完成或超时后由会话 ID 隔离旧回调。
         Task { [self] in
             while true {
-                let stillRecording = await self.isRecording
-                if !stillRecording { return }
+                guard self.sessionID == id, self.isRecording || self.isStopping else { return }
 
                 do {
                     let message = try await task.receive()
+                    guard self.sessionID == id else { return }
                     switch message {
                     case .string(let text):
                         // 收到第一帧就说明握手已完成
-                        let opened = await self.isOpen
+                        let opened = self.isOpen
                         if !opened { self.onOpen() }
-                        await self.handle(text)
+                        self.handle(text)
                     case .data(let raw):
-                        let opened2 = await self.isOpen
+                        let opened2 = self.isOpen
                         if !opened2 { self.onOpen() }
-                        if let text = String(data: raw, encoding: .utf8) { await self.handle(text) }
+                        if let text = String(data: raw, encoding: .utf8) { self.handle(text) }
                     @unknown default:
                         break
                     }
                 } catch {
-                    if await self.isRecording {
+                    guard self.sessionID == id else { return }
+                    if self.isStopping { self.completeSession(id); return }
+                    if self.isRecording {
                         let detail = self.lastErrorBody
                         self.errorMessage = detail.isEmpty
                             ? "连接断开：\(error.localizedDescription)"
@@ -316,15 +399,17 @@ final class LiveTranslateSession: ObservableObject {
             let done = (obj["text"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             if !done.isEmpty { curTranslation = done }
             // 等原文追上来再定稿，避免两者错配
+            let id = sessionID
+            let captionID = liveID
             Task { @MainActor in
                 var waited = 0
                 // 最多等 1.5 秒；若这期间已经 stop()，就直接放弃，
                 // 否则会往已经清空的字幕里写孤行。
-                while waited < 15 && self.curSource.isEmpty && self.isRecording {
+                while waited < 15 && self.curSource.isEmpty && self.sessionID == id && self.liveID == captionID {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                     waited += 1
                 }
-                guard self.isRecording else { return }
+                guard self.sessionID == id, self.liveID == captionID, self.isRecording || self.isStopping else { return }
                 if !self.curTranslation.isEmpty { self.upsert(final: true) }
             }
 
@@ -342,7 +427,8 @@ final class LiveTranslateSession: ObservableObject {
             }
 
         case "session.finished":
-            stop()
+            if !isStopping { stop() }
+            completeSession(sessionID)
 
         case "error":
             let err = obj["error"] as? [String: Any]
@@ -421,11 +507,12 @@ final class LiveTranslateSession: ObservableObject {
     }
 
     private func startCapture() {
+        let id = sessionID
         let cap = AudioCapture { [weak self] chunk in
             guard let self else { return }
             // 音频回调在别的线程，转发回主线程发 WebSocket
             Task { @MainActor in
-                if self.isRecording {
+                if self.sessionID == id && self.isRecording {
                     self.audioBytes += chunk.count
                     self.sendAudio(chunk)
                 }
@@ -492,23 +579,13 @@ final class AudioCapture {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default,
                                 options: [.defaultToSpeaker, .allowBluetooth])
-        // 不要调 setPreferredSampleRate：它会触发会话重配置，输入节点格式跟着变，
-        // 日志里会出现 error -10879 / reconfig pending，tap 就白接了。
-        // 16k 交给下面的 AVAudioConverter 重采样，稳定性比强制硬件采样率好得多。
+        // 使用设备输入格式采集，再由 AVAudioConverter 转为 16k PCM。
         try session.setActive(true, options: [])
-
-        // 会话刚激活就立刻取格式，可能还是 0；等一拍让它稳定下来。
-        var waited = 0
-        while engine.inputNode.outputFormat(forBus: 0).sampleRate <= 0, waited < 10 {
-            Thread.sleep(forTimeInterval: 0.05)
-            waited += 1
-        }
 
         // 2. 开录音文件（关掉「保存录音」时跳过，不落盘）
         if saveAudio { openWav() }
 
-        // 3. 安装 tap —— 这是最容易崩的地方：
-        //    必须用 outputFormat，不能用 inputFormat（两者不一致时会抛 ObjC 异常，Swift try 抓不到）
+        // 3. 按输入节点的输出格式安装 tap。
         let input = engine.inputNode
         // 会话激活后格式可能已变，这里再取一次，且以 outputFormat 为准
         let tapFormat = input.outputFormat(forBus: 0)
@@ -605,7 +682,7 @@ final class AudioCapture {
 
     private func openWav() {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let name = "lesson-\(Int(Date().timeIntervalSince1970)).wav"
+        let name = "lesson-\(UUID().uuidString).wav"
         let url = dir.appendingPathComponent(name)
         FileManager.default.createFile(atPath: url.path, contents: nil)
         guard let handle = try? FileHandle(forWritingTo: url) else { return }

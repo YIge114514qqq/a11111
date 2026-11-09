@@ -11,6 +11,7 @@ enum AIError: LocalizedError {
     case http(Int, String)
     case empty
     case badFormat
+    case courseTooLong
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +25,8 @@ enum AIError: LocalizedError {
             return "接口没有返回内容。"
         case .badFormat:
             return "返回格式看不懂，可以重试一次。"
+        case .courseTooLong:
+            return "课堂内容超过 24000 字符，暂时无法完整生成笔记或回答问题。为避免遗漏内容，本次未发送请求；请使用较短的课程记录。"
         }
     }
 }
@@ -126,6 +129,7 @@ struct AIService {
     }
 
     func generateNotes(transcript: String, language: String) async throws -> LessonNotes {
+        guard transcript.count <= 24000 else { throw AIError.courseTooLong }
         let system = """
         你是留学生的学习助教。根据课堂转写整理复习资料，输出语言为\(language)。
         只输出一个 JSON 对象，字段固定为：
@@ -138,7 +142,7 @@ struct AIService {
         """
         let answer = try await complete(messages: [
             ChatMessage(role: "system", content: system),
-            ChatMessage(role: "user", content: String(transcript.prefix(24000)))
+            ChatMessage(role: "user", content: transcript)
         ], temperature: 0.3)
         if let notes = LessonNotes.parse(from: answer) { return notes }
         return LessonNotes.fallback(from: answer)
@@ -152,6 +156,7 @@ struct AIService {
                 context += "\n" + section.title + "：" + section.points.joined(separator: "；")
             }
         }
+        guard context.count <= 24000 else { throw AIError.courseTooLong }
         let system = """
         你是留学生的课堂助教。只根据下面这节课的内容回答，找不到依据就说"这节课没讲到"。
         回答按这个顺序组织，用中文写：
@@ -164,7 +169,7 @@ struct AIService {
         """
         return try await complete(messages: [
             ChatMessage(role: "system", content: system),
-            ChatMessage(role: "user", content: "【课堂内容】\n" + String(context.prefix(24000)) + "\n\n【问题】\n" + question)
+            ChatMessage(role: "user", content: "【课堂内容】\n" + context + "\n\n【问题】\n" + question)
         ], temperature: 0.3)
     }
 

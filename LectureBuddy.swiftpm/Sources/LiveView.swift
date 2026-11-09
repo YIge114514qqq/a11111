@@ -7,9 +7,11 @@ struct LiveView: View {
     @StateObject private var session = LiveSession()
     /// 端到端实时翻译（最快，直接出中文）
     @StateObject private var live = LiveTranslateSession()
-    private var showingLive: Bool { live.isRecording || !live.lines.isEmpty }
+    private var showingLive: Bool {
+        !session.isRecording && (live.isRecording || live.isStarting || live.isStopping || !live.lines.isEmpty || live.savedAudioName != nil)
+    }
     // 界面用的统一入口：端到端翻译优先，其次才是旧的「识别+翻译」
-    private var isRecording: Bool { live.isRecording || session.isRecording }
+    private var isRecording: Bool { live.isRecording || live.isStarting || session.isRecording }
     private var lines: [CaptionLine] { showingLive ? live.lines : session.lines }
     private var elapsed: TimeInterval { showingLive ? live.elapsed : session.elapsed }
     /// 复制按钮要跟着当前引擎走，否则 DashScope 模式下复制到空字符串
@@ -30,6 +32,7 @@ struct LiveView: View {
     @State private var showSettingsAlert = false
     @State private var finishedLesson: Lesson?
     @State private var showLarge = false
+    @State private var savedLiveSessionID: UUID?
 
     var body: some View {
         NavigationStack {
@@ -67,6 +70,9 @@ struct LiveView: View {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
                     toggleRecording()
                 }
+                .onReceive(live.$completion) { completion in
+                    if let completion { saveLiveLesson(completion) }
+                }
                 .sheet(isPresented: $showLarge) {
                     LargeCaptionView(lines: lines)
                 }
@@ -97,10 +103,9 @@ struct LiveView: View {
     }
 
     private func toggleRecording() {
-        if live.isRecording {
+        guard !live.isStopping else { return }
+        if live.isRecording || live.isStarting {
             live.stop()
-            saveLiveLesson()
-            live.lines = []
             return
         }
         if session.isRecording {
@@ -121,17 +126,19 @@ struct LiveView: View {
     }
 
     /// 把端到端翻译的结果存成一节课
-    private func saveLiveLesson() {
-        guard !live.lines.isEmpty else { return }
+    private func saveLiveLesson(_ completion: LiveTranslateSession.Completion) {
+        guard savedLiveSessionID != completion.id else { return }
+        savedLiveSessionID = completion.id
+        guard !completion.lines.isEmpty || completion.audioFileName != nil else { return }
         var lesson = Lesson(
             title: defaultLessonTitle(),
-            duration: live.elapsed,
-            lines: live.lines
+            duration: completion.duration,
+            lines: completion.lines
         )
-        lesson.audioFileName = live.savedAudioName
+        lesson.audioFileName = completion.audioFileName
         lesson.sourceLanguage = settings.sourceLanguage
         lesson.targetLanguage = settings.targetLanguage
-        finishedLesson = lesson
+        if live.errorMessage == nil { finishedLesson = lesson }
         store.save(lesson)
     }
 
@@ -320,7 +327,15 @@ struct LiveView: View {
         } label: {
             // 用 isRecording（含实时翻译模式），不能只看 session.isRecording：
             // 否则 DashScope 在录时按钮还写「开始记录」，用户会以为没开始，再点一下就结束了。
-            if isRecording {
+            if live.isStopping {
+                // 停止后会等最多 2 秒收尾，让最后一句字幕能回来。
+                // 这期间按钮不能装作可以点，否则用户会以为死机了。
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在收尾…")
+                }
+                .frame(maxWidth: .infinity)
+            } else if isRecording {
                 Label(showingLive ? "结束录音" : "结束并整理笔记", systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
             } else {
@@ -330,6 +345,7 @@ struct LiveView: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(isRecording ? Color.red : Color.indigo)
+        .disabled(live.isStopping)
         .controlSize(.large)
     }
 

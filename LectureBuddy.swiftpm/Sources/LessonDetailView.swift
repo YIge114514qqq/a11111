@@ -80,7 +80,7 @@ struct LessonDetailView: View {
         }
         .task {
             // 下课后第一次打开时自动整理笔记，只跑一次
-            guard lesson.notes == nil, !lesson.lines.isEmpty, settings.isConfigured else { return }
+            guard lesson.notes == nil, !lesson.lines.isEmpty, settings.hasAIConfiguration else { return }
             await generate(for: lesson)
         }
     }
@@ -103,7 +103,7 @@ struct LessonDetailView: View {
             } label: {
                 Label("重新生成笔记", systemImage: "arrow.triangle.2.circlepath")
             }
-            .disabled(generating || lesson.lines.isEmpty)
+            .disabled(generating || lesson.lines.isEmpty || !settings.hasAIConfiguration)
             Button {
                 revealAnswers.toggle()
             } label: {
@@ -169,14 +169,14 @@ struct LessonDetailView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.indigo)
-            .disabled(lesson.lines.isEmpty || !settings.isConfigured)
-            if !settings.isConfigured {
+            .disabled(lesson.lines.isEmpty || !settings.hasAIConfiguration)
+            if !settings.hasAIConfiguration {
                 Text("先去设置里填 API Key").font(.footnote).foregroundStyle(.orange)
             }
         }
     }
     private func generate(for lesson: Lesson) async {
-        guard !generating, !lesson.lines.isEmpty else { return }
+        guard !generating, !lesson.lines.isEmpty, settings.hasAIConfiguration else { return }
         generating = true
         generateError = nil
         do {

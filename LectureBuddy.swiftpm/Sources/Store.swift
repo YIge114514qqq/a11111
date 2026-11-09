@@ -54,7 +54,12 @@ final class AppSettings: ObservableObject {
     /// 只要能听课就算配置好了：
     /// 云端实时翻译只需要 DashScope，课后笔记/提问才需要另一个 AI Key。
     /// 以前这里只看 apiKey，只填了 DashScope 的用户点开始会误报「请填 Key」。
-    var isConfigured: Bool { useLiveTranslate || !apiKey.isEmpty }
+    var isConfigured: Bool { useLiveTranslate || hasAIConfiguration }
+
+    /// 课后笔记和提问需要单独配置 AI Key。
+    var hasAIConfiguration: Bool {
+        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     /// 云端实时翻译是否可用
     var useLiveTranslate: Bool {
