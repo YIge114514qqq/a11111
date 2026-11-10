@@ -389,9 +389,21 @@ final class LiveSession: NSObject, ObservableObject {
                 let batch = self.lines.filter { ids.contains($0.id) }
                 guard !batch.isEmpty else { continue }
 
+                // 给模型最近几句已定稿的原文/译文当上下文。
+                // 韩语里大量省略主语、敬语层级和指示词（그거/이런）离开上文就没法翻得自然。
+                let firstIndex = self.lines.firstIndex { $0.id == batch[0].id } ?? 0
+                let start = max(0, firstIndex - 4)
+                let context = self.lines[start..<firstIndex].compactMap { line -> String? in
+                    guard let t = line.translation, !t.isEmpty else { return nil }
+                    return "\(line.text) → \(t)"
+                }.joined(separator: "\n")
+
                 self.isTranslating = true
                 do {
-                    let translated = try await service.translate(lines: batch.map(\.text), target: target)
+                    let translated = try await service.translate(
+                        lines: batch.map(\.text),
+                        target: target,
+                        context: context)
                     guard !Task.isCancelled else { return }
                     for (index, line) in batch.enumerated() where index < translated.count {
                         if let i = self.lines.firstIndex(where: { $0.id == line.id }) {
@@ -400,8 +412,7 @@ final class LiveSession: NSObject, ObservableObject {
                     }
                     self.translationError = nil
                 } catch {
-                    self.translationError = (error as? LocalizedError)?.errorDescription
-                        ?? error.localizedDescription
+                    self.translationError = friendlyErrorMessage(error)
                 }
             }
         }

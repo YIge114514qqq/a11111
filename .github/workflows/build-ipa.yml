@@ -20,7 +20,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-tests
-          swiftc LectureBuddy.swiftpm/Sources/Models.swift CI/Tests/main.swift -o build-tests/model-tests
+          swiftc LectureBuddy.swiftpm/Sources/Models.swift \
+                  LectureBuddy.swiftpm/Sources/NetworkErrorMessage.swift \
+                  CI/Tests/main.swift -o build-tests/model-tests
           build-tests/model-tests
 
       - name: Install XcodeGen

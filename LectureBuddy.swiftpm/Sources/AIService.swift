@@ -66,6 +66,29 @@ struct AIService {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        // 切屏/锁屏时 iOS 会挂起 App，正在跑的请求被切断，表现为
+        // NSURLErrorNetworkConnectionLost(-1005)、超时或 “network connection was lost”。
+        // 这种情况直接失败毫无意义，重试一次通常就能过。
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                return try await performOnce(request)
+            } catch let error as AIError {
+                // 已经是服务端明确回复的错（401/400/模型不存在），重试没用，直接抛
+                throw error
+            } catch {
+                lastError = error
+                guard isRetryableNetworkError(error), attempt < 2 else { throw error }
+                // 退避一下再试，避免马上又撞上同一个问题
+                try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 800_000_000)
+            }
+        }
+        throw lastError ?? AIError.empty
+    }
+
+    /// 单次请求。网络层的错误原样抛出（保留 NSURLErrorDomain 错误码），
+    /// 让上层重试逻辑能识别；给用户看的文案在 UI 层转换。
+    private func performOnce(_ request: URLRequest) async throws -> String {
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode >= 300 {
             let text = String(data: data, encoding: .utf8) ?? ""
@@ -81,29 +104,51 @@ struct AIService {
         return content
     }
 
-    /// 批量翻译若干句话，条数保持一致
-    func translate(lines: [String], target: String) async throws -> [String] {
+    /// 批量翻译若干句话，条数保持一致。
+    /// context 传上文已定稿的「原文 → 译文」，让模型能接着前面的语气和译法走。
+    func translate(lines: [String], target: String, context: String = "") async throws -> [String] {
         guard !lines.isEmpty else { return [] }
         let numbered = lines.enumerated()
             .map { "\($0.offset + 1). \($0.element)" }
             .joined(separator: "\n")
         let system = """
-        你是坐在学生旁边的朝鲜语/外语课堂同传。把每句原文翻译成\(target)。
+        你在给中国留学生做韩语课堂的同声传译，同时也像是一个韩语母语的听讲者。
+        把每句原文翻译成\(target)。
 
-        翻译要求：
-        1. 说人话。像同学课后给你转述老师的话，不要书面腔、不要机翻腔。
-        2. 口语词就按口语译，按语境翻成自然的中文口头语。
-        3. 专业术语要准。学科里的固定译法要用通行译名，拿不准的保留原文并括号补中文。
-        4. 长句拆成符合中文语序的短句，但不合并、不增删信息。
-        5. 不要添加解释、不要加“老师说道”这类旁白。
+        【第一优先级：像人话】
+        老师是在讲课，不是在念稿。翻出来应该像中国同学听完之后用自己的话讲给你：
+        有口语节奏，能省的主语就省，不要用“其、之、进行、得以”这种书面词。
 
-        格式：逐句对应，不合并、不省略。
-        只输出一个 JSON 字符串数组，长度必须等于原文句数，不要输出任何其他文字。
+        【韩语特有的地方，必须处理对】
+        1. 敬语层级：습니다/해요/한다 语气不同。教授说“여러분”是在称呼全班，不要译成“你们各位”。
+        2. 省略主语：韩语常不说主语，要从前文推断，不要每句都硬加“老师”或“我们”。
+        3. 连接词：그런데=不过/那么，그래서=所以，그러니까=也就是说；근데 口语常是“不过”，
+           一律译成“因此/所以”会比老师说得很正式。
+        4. 指示词：이거/그거/저거 在课堂上往往指代刚提到的概念，译成“这个概念”比“这个东西”准。
+        5. 汉字词：理解、检讨、工夫 这类韩语汉字词不等于现代汉语词义，按语境译，不要直接拼成中文。
+        6. 专业术语：用学科通行译名；没有通行译法就保留原文并用括号补中文，不要自己造词。
+
+        【不能做的事】
+        - 不合并句子，不省略，不补上原文没有的信息。
+        - 不加“老师说道”“这里强调”这类旁白。
+        - 不把口语强行改成书面语；也不为了口语丢掉专业准确性。
+        - 指代不明时，宁可保留一点原文语序，也不要编一个主语出来。
+
+        格式：逐句对应，输出 JSON 字符串数组，长度必须等于原文句数。
+        只输出这个数组，不要输出任何其他文字。
         """
+
+        var userText = ""
+        if !context.isEmpty {
+            // 上文帮模型接着前面的译法走，也帮它处理省略主语
+            userText += "【上文（仅供衔接，不要再翻译）】\n" + context + "\n\n"
+        }
+        userText += "【要翻译的句子】\n" + numbered
+
         let answer = try await complete(messages: [
             ChatMessage(role: "system", content: system),
-            ChatMessage(role: "user", content: numbered)
-        ])
+            ChatMessage(role: "user", content: userText)
+        ], temperature: 0.25)
         guard let arr = Self.jsonStringArray(from: answer) else { throw AIError.badFormat }
         guard arr.count == lines.count else {
             // 条数对不上时按行兜底，避免字幕错位
@@ -202,13 +247,28 @@ struct AIService {
         只输出要点列表，不要前言。
         """
 
-        var parts: [String] = []
-        for (index, chunk) in chunks.enumerated() {
-            let answer = try await complete(messages: [
-                ChatMessage(role: "system", content: system),
-                ChatMessage(role: "user", content: "第 \(index + 1)/\(chunks.count) 段：\n" + chunk)
-            ], temperature: 0.2)
-            parts.append("【第 \(index + 1) 段要点】\n" + answer)
+        // 分段并发提炼：串行时每块都要等上一块返回，长课会慢好几倍。
+        // 用 withTaskGroup 并发，再按下标拼回去，顺序不会乱。
+        let total = chunks.count
+        let parts: [String] = try await withThrowingTaskGroup(
+            of: (Int, String).self, returning: [String].self
+        ) { group in
+            for (index, chunk) in chunks.enumerated() {
+                group.addTask {
+                    let answer = try await self.complete(messages: [
+                        ChatMessage(role: "system", content: system),
+                        ChatMessage(role: "user", content: "第 \(index + 1)/\(total) 段：\n" + chunk)
+                    ], temperature: 0.2)
+                    return (index, answer)
+                }
+            }
+            var collected: [Int: String] = [:]
+            for try await (index, answer) in group {
+                collected[index] = answer
+            }
+            return (0..<total).compactMap { index in
+                collected[index].map { "【第 \(index + 1) 段要点】\n" + $0 }
+            }
         }
         return parts.joined(separator: "\n\n")
     }

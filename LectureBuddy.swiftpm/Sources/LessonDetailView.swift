@@ -230,7 +230,7 @@ struct LessonDetailView: View {
             updated.notes = notes
             store.save(updated)
         } catch {
-            generateError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            generateError = friendlyErrorMessage(error)
         }
         generating = false
     }
