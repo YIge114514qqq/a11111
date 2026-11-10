@@ -111,7 +111,7 @@ expect(friendlyErrorMessage(lost).contains("切到别的 App"), "connection lost
 expect(friendlyErrorMessage(NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)).contains("超时"), "timeout message")
 expect(friendlyErrorMessage(NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)).contains("没有连网"), "offline message")
 expect(friendlyErrorMessage(NSError(domain: NSURLErrorDomain, code: NSURLErrorSecureConnectionFailed)).contains("证书"), "TLS message")
-expect(friendlyErrorMessage(AIError.missingKey) == AIError.missingKey.errorDescription, "AIError keeps its own wording")
+expect(friendlyErrorMessage(NSError(domain: "MyApp", code: 7, userInfo: [NSLocalizedDescriptionKey: "自定义错误"])) == "自定义错误", "non-URL errors keep their own wording")
 expect(friendlyErrorMessage(NSError(domain: NSURLErrorDomain, code: -9999)).contains("-9999"), "unknown code is surfaced")
 
 // MARK: - 重试判定
@@ -119,8 +119,8 @@ expect(friendlyErrorMessage(NSError(domain: NSURLErrorDomain, code: -9999)).cont
 expect(isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)), "connection lost is retryable")
 expect(isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)), "timeout is retryable")
 expect(isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)), "offline is retryable")
-expect(!isRetryableNetworkError(AIError.http(401, "invalid key")), "401 is not retried")
+expect(!isRetryableNetworkError(NSError(domain: "MyApp", code: 401)), "app-level error is not retried")
 expect(!isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)), "cancelled is not retried")
-expect(!isRetryableNetworkError(AIError.badFormat), "bad format is not retried")
+expect(!isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorUserCancelledAuthentication)), "cancelled auth is not retried")
 
 print("PASS: \(checks) model checks")
