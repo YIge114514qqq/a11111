@@ -22,6 +22,8 @@ jobs:
           mkdir -p build-tests
           swiftc LectureBuddy.swiftpm/Sources/Models.swift \
                   LectureBuddy.swiftpm/Sources/NetworkErrorMessage.swift \
+                  LectureBuddy.swiftpm/Sources/TutorChain.swift \
+                  CI/Tests/tutor.swift \
                   CI/Tests/main.swift -o build-tests/model-tests
           build-tests/model-tests
 

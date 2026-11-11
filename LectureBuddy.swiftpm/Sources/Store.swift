@@ -12,6 +12,12 @@ final class AppSettings: ObservableObject {
     @Published var notesLanguage: String { didSet { defaults.set(notesLanguage, forKey: "notesLanguage") } }
     @Published var showSource: Bool { didSet { defaults.set(showSource, forKey: "showSource") } }
 
+    // 视觉模型：只在 OCR 不确定或课件含公式/图表时才调用，成本比纯文本高很多。
+    // 单独配置是为了能继续用便宜的文本模型做日常问答。
+    @Published var visionBaseURL: String { didSet { defaults.set(visionBaseURL, forKey: "visionBaseURL") } }
+    @Published var visionAPIKey: String { didSet { defaults.set(visionAPIKey, forKey: "visionAPIKey") } }
+    @Published var visionModel: String { didSet { defaults.set(visionModel, forKey: "visionModel") } }
+
     // 阿里云实时语音翻译（端到端，最快）
     @Published var dashscopeKey: String { didSet { defaults.set(dashscopeKey, forKey: "dashscopeKey") } }
     @Published var dashscopeURL: String { didSet { defaults.set(dashscopeURL, forKey: "dashscopeURL") } }
@@ -38,6 +44,12 @@ final class AppSettings: ObservableObject {
         targetLanguage = defaults.string(forKey: "targetLanguage") ?? "zh-CN"
         notesLanguage = defaults.string(forKey: "notesLanguage") ?? "简体中文"
         showSource = defaults.object(forKey: "showSource") as? Bool ?? true
+        // 视觉模型不设默认 Key：没填就是没开，避免用户不知情就产生高额调用。
+        // 地址默认用阿里云兼容模式，和多半人已有的 DashScope 账号一致。
+        visionBaseURL = defaults.string(forKey: "visionBaseURL")
+            ?? "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        visionAPIKey = defaults.string(forKey: "visionAPIKey") ?? ""
+        visionModel = defaults.string(forKey: "visionModel") ?? "qwen-vl-max"
         dashscopeKey = defaults.string(forKey: "dashscopeKey") ?? ""
         // 默认就填好官方地址：以前这里默认空串，新用户只填 Key 不填地址，
         // useLiveTranslate 就为 false，点开始直接被拦或走错引擎。
@@ -66,6 +78,13 @@ final class AppSettings: ObservableObject {
     /// 课后笔记和提问需要单独配置 AI Key。
     var hasAIConfiguration: Bool {
         !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 视觉模型是否配好。没配就只能靠文字识别，图和公式会看不了。
+    var hasVisionConfiguration: Bool {
+        !visionAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !visionBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !visionModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// 云端实时翻译是否可用
@@ -245,5 +264,44 @@ final class LessonStore: ObservableObject {
         } catch {
             return name
         }
+    }
+}
+// MARK: - 课件与讲解截图
+
+extension LessonStore {
+    /// 课件（PDF/图片）和讲解截图都存在 Documents 下，跟着沙盒走。
+    func fileURL(named name: String) -> URL {
+        audioURL(named: name)
+    }
+
+    /// 把用户选的文件拷进沙盒。返回沙盒内的文件名。
+    /// 注意：外部 URL 必须先 startAccessingSecurityScopedResource，
+    /// 否则拷贝会失败（真机上很常见，模拟器上反而没事）。
+    func importFile(from source: URL, preferredExtension: String? = nil) throws -> String {
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+
+        let ext = preferredExtension ?? source.pathExtension.lowercased()
+        let safeExt = ext.isEmpty ? "pdf" : ext
+        let name = "courseware-\(UUID().uuidString).\(safeExt)"
+        let destination = fileURL(named: name)
+
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.copyItem(at: source, to: destination)
+        return name
+    }
+
+    /// 保存讲解截图，返回文件名
+    func saveTutorImage(_ data: Data) throws -> String {
+        let name = "tutor-\(UUID().uuidString).jpg"
+        try data.write(to: fileURL(named: name), options: .atomic)
+        return name
+    }
+
+    func deleteFile(named name: String?) {
+        guard let name, !name.isEmpty else { return }
+        try? FileManager.default.removeItem(at: fileURL(named: name))
     }
 }

@@ -243,6 +243,12 @@ struct Lesson: Identifiable, Codable, Hashable {
     var audioFileName: String?
     var sourceLanguage: String = ""
     var targetLanguage: String = ""
+    /// 导入的课件文件名（PDF / 图片），都在 Documents 下，不上传
+    var coursewareFileName: String?
+    /// 每页的手写批注（PencilKit 编码后的数据），按页序存
+    var annotations: [Data] = []
+    /// 圈选提问的历史：截图 + 讲解，复习时能回看
+    var tutorLog: [TutorEntry] = []
 
     /// 和 LessonNotes 一样宽容解码：旧文件里若缺 id/createdAt 等字段，
     /// 不能因为一个字段就整库解不出来（那才是升级后课程全没的原因）。
@@ -258,6 +264,9 @@ struct Lesson: Identifiable, Codable, Hashable {
         audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
         sourceLanguage = try c.decodeIfPresent(String.self, forKey: .sourceLanguage) ?? ""
         targetLanguage = try c.decodeIfPresent(String.self, forKey: .targetLanguage) ?? ""
+        coursewareFileName = try c.decodeIfPresent(String.self, forKey: .coursewareFileName)
+        annotations = try c.decodeIfPresent([Data].self, forKey: .annotations) ?? []
+        tutorLog = try c.decodeIfPresent([TutorEntry].self, forKey: .tutorLog) ?? []
     }
 
     init() {
@@ -271,7 +280,8 @@ struct Lesson: Identifiable, Codable, Hashable {
          notes: LessonNotes? = nil,
          audioFileName: String? = nil,
          sourceLanguage: String = "",
-         targetLanguage: String = "") {
+         targetLanguage: String = "",
+         coursewareFileName: String? = nil) {
         self.title = title
         self.createdAt = createdAt
         self.duration = duration
@@ -280,6 +290,7 @@ struct Lesson: Identifiable, Codable, Hashable {
         self.audioFileName = audioFileName
         self.sourceLanguage = sourceLanguage
         self.targetLanguage = targetLanguage
+        self.coursewareFileName = coursewareFileName
     }
 
     var transcriptText: String {
@@ -326,4 +337,31 @@ func timeString(_ time: TimeInterval) -> String {
     let s = total % 60
     if h > 0 { return String(format: "%d:%02d:%02d", h, m, s) }
     return String(format: "%02d:%02d", m, s)
+}
+/// 一次「圈选提问」的记录：存下来复习时能回看当时不理解的是什么。
+/// 截图单独存文件（不进 lessons.json），这里只记文件名，避免把 JSON 撑爆。
+struct TutorEntry: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
+    var createdAt: Date = Date()
+    /// 圈选的区域截图文件名（Documents 下）
+    var imageFileName: String?
+    /// 圈选区域识别出来的文字（可能为空：纯图/公式时 OCR 什么也给不出）
+    var selectionText: String = ""
+    /// 课件页码，从 1 开始
+    var pageIndex: Int = 1
+    /// 结构化讲解的六步
+    var steps: [TutorStep] = []
+    /// 最后那道检验理解的小题
+    var followUpQuestion: String = ""
+    /// 这次是走文字模型还是视觉模型（让用户之后能看出成本差异）
+    var usedVision: Bool = false
+
+    var isEmpty: Bool { steps.isEmpty && followUpQuestion.isEmpty }
+}
+
+/// 讲解链里的一步
+struct TutorStep: Identifiable, Codable, Hashable {
+    var id: UUID = UUID()
+    var title: String
+    var body: String
 }

@@ -22,6 +22,7 @@ struct SettingsView: View {
                 termsSection
                 providerSection
                 apiSection
+                visionSection
                 languageSection
                 notesSection
                 backupSection
@@ -183,6 +184,34 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(testResult.hasPrefix("OK") ? Color.green : Color.pink)
             }
+        }
+    }
+
+    /// 视觉模型：只在圈选提问遇到图表/公式、或文字识别不准时才会用到。
+    /// 不填也能用，只是看不了图。
+    private var visionSection: some View {
+        Section {
+            TextField("Base URL", text: $settings.visionBaseURL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+            SecureField("视觉模型 Key", text: $settings.visionAPIKey)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("模型名，例如 qwen-vl-max", text: $settings.visionModel)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if settings.hasVisionConfiguration {
+                Label("已配置：圈到图表/公式时会自动看图", systemImage: "checkmark.circle.fill")
+                    .font(.footnote).foregroundStyle(.green)
+            } else {
+                Text("不填也能用。只靠文字识别，看图/公式会识别不出内容。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("视觉模型（可选）")
+        } footer: {
+            Text("课件圈选提问时，先用设备端文字识别；识别不准或含公式、图表，才把截图发给视觉模型。这样日常提问基本不花钱。视觉模型按图片计费，比文字贵 3–10 倍。")
         }
     }
 

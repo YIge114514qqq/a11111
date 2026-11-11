@@ -21,6 +21,7 @@ struct LessonDetailView: View {
     @State private var playing = false
     @State private var shareAudioURL: URL?
     @State private var shareError: String?
+    @State private var showCourseware = false
 
     private var lesson: Lesson? {
         store.lessons.first { $0.id == lessonID }
@@ -82,6 +83,11 @@ struct LessonDetailView: View {
             set: { if $0 == nil { shareAudioURL = nil } })) { file in
             ShareSheet(items: [file.url])
         }
+        .fullScreenCover(isPresented: $showCourseware) {
+            NavigationStack {
+                CoursewareView(lessonID: lessonID)
+            }
+        }
         .toolbar {
             if showsCloseButton {
                 ToolbarItem(placement: .topBarLeading) {
@@ -100,6 +106,12 @@ struct LessonDetailView: View {
     }
     private func menu(for lesson: Lesson) -> some View {
         Menu {
+            Button {
+                showCourseware = true
+            } label: {
+                Label(lesson.coursewareFileName == nil ? "导入课件" : "打开课件",
+                      systemImage: "doc.viewfinder")
+            }
             Button {
                 UIPasteboard.general.string = lesson.transcriptText
             } label: {

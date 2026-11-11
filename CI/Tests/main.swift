@@ -124,3 +124,5 @@ expect(!isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErr
 expect(!isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorUserCancelledAuthentication)), "cancelled auth is not retried")
 
 print("PASS: \(checks) model checks")
+
+runTutorTests()
