@@ -95,7 +95,7 @@ struct CoursewareView: View {
 
     private func reader(lesson: Lesson, fileName: String) -> some View {
         VStack(spacing: 0) {
-            toolbar
+            toolbar(lesson: lesson)
             ZStack(alignment: .topTrailing) {
                 PencilCanvasView(
                     pageImage: pageImage,
@@ -120,7 +120,7 @@ struct CoursewareView: View {
         .onAppear { loadDocument(fileName: fileName, lesson: lesson) }
     }
 
-    private var toolbar: some View {
+    private func toolbar(lesson: Lesson) -> some View {
         HStack(spacing: 10) {
             Button { tool = .pen } label: { toolIcon("pencil.tip", .pen) }
                 .accessibilityLabel("铅笔")
