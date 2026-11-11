@@ -26,7 +26,8 @@ enum TutorChain {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return false }
         // 数学符号密度高就当作公式
-        let symbols = CharacterSet(charactersIn: "=+−-×÷∑∫√≤≥≈≠θαβγλμπσΔΩ^_{}[]|/\<>")
+        // 注意：字符集里不要写反斜杠，Swift 字符串里它会开启转义，容易编译失败
+        let symbols = CharacterSet(charactersIn: "=+−-×÷∑∫√≤≥≈≠θαβγλμπσΔΩ^_{}[]|/<>~±∂∇")
         let symbolCount = trimmed.unicodeScalars.filter { symbols.contains($0) }.count
         let ratio = Double(symbolCount) / Double(max(trimmed.count, 1))
         if ratio > 0.12 { return true }
