@@ -19,6 +19,8 @@ struct LessonDetailView: View {
     @State private var revealAnswers = false
     @State private var player: AVAudioPlayer?
     @State private var playing = false
+    @State private var shareAudioURL: URL?
+    @State private var shareError: String?
 
     private var lesson: Lesson? {
         store.lessons.first { $0.id == lessonID }
@@ -68,6 +70,18 @@ struct LessonDetailView: View {
         }
         .navigationTitle(lesson.title)
         .navigationBarTitleDisplayMode(.inline)
+        .alert("无法导出", isPresented: Binding(
+            get: { shareError != nil },
+            set: { if !$0 { shareError = nil } })) {
+            Button("好") { shareError = nil }
+        } message: {
+            Text(shareError ?? "")
+        }
+        .sheet(item: Binding(
+            get: { shareAudioURL.map(ShareFile.init) },
+            set: { if $0 == nil { shareAudioURL = nil } })) { file in
+            ShareSheet(items: [file.url])
+        }
         .toolbar {
             if showsCloseButton {
                 ToolbarItem(placement: .topBarLeading) {
@@ -370,6 +384,14 @@ struct LessonDetailView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    // 录音能直接导出去：发给同学、归档、或换机前存一份
+                    Button {
+                        shareAudio(named: name)
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.title3)
+                    }
+                    .accessibilityLabel("导出课堂录音")
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 8)
@@ -607,6 +629,18 @@ struct LessonDetailView: View {
             }
         }
         return out
+    }
+
+    // MARK: - 导出录音
+
+    private func shareAudio(named name: String) {
+        let url = store.audioURL(named: name)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            shareError = "录音文件找不到了（换机或重装后旧录音不会跟过来）。"
+            return
+        }
+        shareError = nil
+        shareAudioURL = url
     }
 }
 /// 一道练习题：默认只给题，答案和讲解点开才看，逼学生先自己答

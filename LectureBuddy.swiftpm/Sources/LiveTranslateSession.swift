@@ -583,6 +583,8 @@ final class AudioCapture {
     private var fileHandle: FileHandle?
     /// tap 是否已装上：start() 中途抛错时不会再被执行，若不记标记，下次 start 会重复 installTap 直接崩
     private var tapInstalled = false
+    /// 本次采集是否开启了系统降噪（在 start() 里从设置读）
+    private var noiseSuppression = false
     private(set) var fileName: String?
     private var dataBytes: UInt32 = 0
     /// 音频回调在后台线程，stop() 在主线程；写文件全部串行到这条队列，避免竞态
@@ -615,10 +617,24 @@ final class AudioCapture {
         }
 
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default,
+        // mode 用 .measurement：关掉系统为“打电话/录音”做的音效处理，
+        // 语音识别更准。之前用 .default，系统会给麦克风加自动增益和降噪，
+        // 教室里的远场人声容易被压成忽大忽小，识别结果就抖。
+        try session.setCategory(.playAndRecord, mode: .measurement,
                                 options: [.defaultToSpeaker, .allowBluetooth])
         // 使用设备输入格式采集，再由 AVAudioConverter 转为 16k PCM。
         try session.setActive(true, options: [])
+
+        // 系统级降噪：对远场（教授在前排、你在后排）效果最明显。
+        // 只在用户开了开关时启用；不支持时静默跳过，不影响录音。
+        self.noiseSuppression = AppSettings.shared.noiseSuppression
+        if noiseSuppression, session.isInputAvailable {
+            do {
+                try engine.inputNode.setVoiceProcessingEnabled(true)
+            } catch {
+                // 模拟器或不支持的设备会报错，忽略即可
+            }
+        }
 
         // 2. 开录音文件（关掉「保存录音」时跳过，不落盘）
         if saveAudio { openWav() }

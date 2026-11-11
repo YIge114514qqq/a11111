@@ -144,7 +144,9 @@ struct LiveView: View {
             duration: completion.duration,
             lines: completion.lines
         )
-        lesson.audioFileName = completion.audioFileName
+        lesson.audioFileName = store.renameAudio(named: completion.audioFileName,
+                                                lessonTitle: lesson.title,
+                                                createdAt: lesson.createdAt)
         lesson.sourceLanguage = settings.sourceLanguage
         lesson.targetLanguage = settings.targetLanguage
         if live.errorMessage == nil { finishedLesson = lesson }

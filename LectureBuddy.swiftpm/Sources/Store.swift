@@ -23,6 +23,11 @@ final class AppSettings: ObservableObject {
     @Published var termsText: String { didSet { defaults.set(termsText, forKey: "termsText") } }
     /// 是否同时保存课堂录音
     @Published var recordAudio: Bool { didSet { defaults.set(recordAudio, forKey: "recordAudio") } }
+    /// 降噪：开启后让系统做远场人声处理，教室噪声大时识别更准。
+    /// 关掉可以听到更“原始”的声音，但干扰也更多。
+    @Published var noiseSuppression: Bool {
+        didSet { defaults.set(noiseSuppression, forKey: "noiseSuppression") }
+    }
     private let defaults = UserDefaults.standard
 
     private init() {
@@ -41,6 +46,8 @@ final class AppSettings: ObservableObject {
         courseTopic = defaults.string(forKey: "courseTopic") ?? ""
         termsText = defaults.string(forKey: "termsText") ?? ""
         recordAudio = defaults.object(forKey: "recordAudio") as? Bool ?? true
+        // 默认开：教室普遍有空调、键盘、隔壁的人声
+        noiseSuppression = defaults.object(forKey: "noiseSuppression") as? Bool ?? true
     }
 
     var sourceTitle: String {
@@ -201,5 +208,42 @@ final class LessonStore: ObservableObject {
     func audioURL(named name: String) -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(name)
+    }
+
+    /// 录音文件本来是 lesson-<UUID>.wav，导出后根本认不出是哪节课。
+    /// 这里把文件名改成「日期 标题」，方便直接发给别人或者归档。
+    /// 改名失败就沿用原名，不能因为改名把录音弄丢。
+    func renameAudio(named name: String?,
+                     lessonTitle: String,
+                     createdAt: Date) -> String? {
+        guard let name else { return nil }
+        let source = audioURL(named: name)
+        guard FileManager.default.fileExists(atPath: source.path) else { return name }
+
+        let stamp = DateFormatter()
+        stamp.locale = Locale(identifier: "zh_CN")
+        stamp.dateFormat = "yyyy-MM-dd HHmm"
+        let ext = (name as NSString).pathExtension.isEmpty ? "wav" : (name as NSString).pathExtension
+
+        // 文件名里不能有 / : 这类字符
+        let safeTitle = lessonTitle
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>"))
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = "\(stamp.string(from: createdAt)) \(safeTitle.isEmpty ? "课堂录音" : safeTitle)"
+        var candidate = "\(base).\(ext)"
+        var counter = 2
+        while FileManager.default.fileExists(atPath: audioURL(named: candidate).path) {
+            candidate = "\(base) (\(counter)).\(ext)"
+            counter += 1
+            if counter > 99 { return name }
+        }
+
+        do {
+            try FileManager.default.moveItem(at: source, to: audioURL(named: candidate))
+            return candidate
+        } catch {
+            return name
+        }
     }
 }

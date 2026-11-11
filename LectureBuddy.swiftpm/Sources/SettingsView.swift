@@ -54,6 +54,7 @@ struct SettingsView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             Toggle("同时保存课堂录音", isOn: $settings.recordAudio)
+            Toggle("降噪（教室噪声大时建议开）", isOn: $settings.noiseSuppression)
         } header: {
             Text("实时语音翻译（推荐）")
         } footer: {
