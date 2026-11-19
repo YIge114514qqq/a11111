@@ -131,6 +131,14 @@ struct CoursewareView: View {
             Button { tool = .select } label: { toolIcon("lasso", .select) }
                 .accessibilityLabel("圈选提问")
 
+            if tool == .select {
+                // 没 Apple Pencil 也能用：手指直接拖一个框就行
+                Text("用手指或笔拖一个框，松手就讲解")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
             Divider().frame(height: 22)
 
             Button { goTo(pageIndex - 1, lesson: lesson) } label: {
