@@ -284,3 +284,26 @@ extension PencilCanvasView.Coordinator: UIGestureRecognizerDelegate {
         return tool == .select
     }
 }
+
+/// 给 SwiftUI 用的画布句柄：读写笔画、清空。
+/// 页面切换时用它把上一页的笔画存回去、再把新页的载入。
+struct CanvasHandle {
+    weak var canvas: PKCanvasView?
+
+    func drawingData() -> Data? {
+        canvas?.drawing.dataRepresentation()
+    }
+
+    func loadDrawing(_ data: Data?) {
+        guard let canvas else { return }
+        if let data, let drawing = try? PKDrawing(data: data) {
+            canvas.drawing = drawing
+        } else {
+            canvas.drawing = PKDrawing()
+        }
+    }
+
+    func clear() {
+        canvas?.drawing = PKDrawing()
+    }
+}
