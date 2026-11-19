@@ -126,3 +126,5 @@ expect(!isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErr
 print("PASS: \(checks) model checks")
 
 runTutorTests()
+
+runTutorLogTests()

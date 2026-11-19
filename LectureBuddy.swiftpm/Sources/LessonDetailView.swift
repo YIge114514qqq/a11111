@@ -22,6 +22,7 @@ struct LessonDetailView: View {
     @State private var shareAudioURL: URL?
     @State private var shareError: String?
     @State private var showCourseware = false
+    @State private var showTutorLog = false
 
     private var lesson: Lesson? {
         store.lessons.first { $0.id == lessonID }
@@ -88,6 +89,11 @@ struct LessonDetailView: View {
                 CoursewareView(lessonID: lessonID)
             }
         }
+        .sheet(isPresented: $showTutorLog) {
+            NavigationStack {
+                TutorLogView(lessonID: lessonID)
+            }
+        }
         .toolbar {
             if showsCloseButton {
                 ToolbarItem(placement: .topBarLeading) {
@@ -112,6 +118,13 @@ struct LessonDetailView: View {
                 Label(lesson.coursewareFileName == nil ? "导入课件" : "打开课件",
                       systemImage: "doc.viewfinder")
             }
+            Button {
+                showTutorLog = true
+            } label: {
+                Label("讲解记录\(lesson.tutorLog.isEmpty ? "" : "（\(lesson.tutorLog.count)）")",
+                      systemImage: "text.book.closed")
+            }
+            .disabled(lesson.tutorLog.isEmpty)
             Button {
                 UIPasteboard.general.string = lesson.transcriptText
             } label: {

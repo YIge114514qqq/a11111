@@ -58,3 +58,38 @@ func runTutorTests() {
 
     print("PASS: tutor chain checks")
 }
+
+// 旧数据里没有 tutorLog，升级后不能因为新字段就解不出来
+func runTutorLogTests() {
+    let json = """
+    [{"id":"33333333-3333-3333-3333-333333333333","title":"没讲解记录的课","createdAt":700000000,"notes":{"summary":"x","framework":{"bigPicture":"主线"}}}]
+    """
+    do {
+        let lessons = try JSONDecoder().decode([Lesson].self, from: Data(json.utf8))
+        assert(lessons.count == 1)
+        assert(lessons[0].tutorLog.isEmpty, "missing tutorLog must default to empty")
+        assert(lessons[0].coursewareFileName == nil, "missing courseware defaults to nil")
+        assert(lessons[0].notes?.framework.bigPicture == "主线")
+    } catch {
+        fatalError("FAIL: lesson without tutorLog must decode: \(error)")
+    }
+
+    // 带讲解记录的课要能往返
+    var entry = TutorEntry()
+    entry.pageIndex = 2
+    entry.selectionText = "圈到的字"
+    entry.steps = [TutorStep(title: "这是什么", body: "一个定义")]
+    entry.followUpQuestion = "为什么要这样？"
+    entry.usedVision = true
+
+    var lesson = Lesson(title: "有讲解的课")
+    lesson.tutorLog = [entry]
+    let data = try! JSONEncoder().encode([lesson])
+    let back = try! JSONDecoder().decode([Lesson].self, from: data)
+    assert(back[0].tutorLog.count == 1)
+    assert(back[0].tutorLog[0].pageIndex == 2)
+    assert(back[0].tutorLog[0].steps.first?.title == "这是什么")
+    assert(back[0].tutorLog[0].usedVision)
+
+    print("PASS: tutor log checks")
+}
