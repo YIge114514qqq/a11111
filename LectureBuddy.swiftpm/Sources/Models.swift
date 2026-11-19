@@ -270,7 +270,7 @@ struct LessonNotes: Codable, Hashable {
         notes.summary = (obj["summary"] as? String) ?? ""
 
         if let sections = obj["sections"] as? [[String: Any]] {
-            notes.sections = sections.compactMap { item in
+            notes.sections = sections.compactMap { item -> NoteSection? in
                 guard let title = item["title"] as? String, !title.isEmpty else { return nil }
                 let points = (item["points"] as? [Any])?.compactMap { $0 as? String } ?? []
                 return NoteSection(title: title, points: points)
@@ -278,7 +278,7 @@ struct LessonNotes: Codable, Hashable {
         }
 
         if let cards = obj["cards"] as? [[String: Any]] {
-            notes.cards = cards.compactMap { item in
+            notes.cards = cards.compactMap { item -> StudyCard? in
                 let q = (item["question"] as? String) ?? (item["q"] as? String)
                 let a = (item["answer"] as? String) ?? (item["a"] as? String)
                 guard let question = q, !question.isEmpty else { return nil }
@@ -287,7 +287,7 @@ struct LessonNotes: Codable, Hashable {
         }
 
         if let glossary = obj["glossary"] as? [[String: Any]] {
-            notes.glossary = glossary.compactMap { item in
+            notes.glossary = glossary.compactMap { item -> GlossaryItem? in
                 guard let term = item["term"] as? String, !term.isEmpty else { return nil }
                 let explain = (item["explain"] as? String) ?? (item["meaning"] as? String) ?? ""
                 return GlossaryItem(term: term, explain: explain)
@@ -300,7 +300,7 @@ struct LessonNotes: Codable, Hashable {
                 ?? (fw["big_picture"] as? String) ?? ""
             notes.framework.problem = (fw["problem"] as? String) ?? ""
             let flow = (fw["flow"] as? [[String: Any]]) ?? (fw["steps"] as? [[String: Any]]) ?? []
-            notes.framework.flow = flow.compactMap { item in
+            notes.framework.flow = flow.compactMap { item -> FrameworkItem? in
                 guard let title = item["title"] as? String, !title.isEmpty else { return nil }
                 let points = (item["keyPoints"] as? [Any])?.compactMap { $0 as? String }
                     ?? (item["key_points"] as? [Any])?.compactMap { $0 as? String } ?? []
@@ -312,7 +312,7 @@ struct LessonNotes: Codable, Hashable {
 
         // 2) 细节：知识点 + 疑问 + 例子
         if let points = obj["knowledgePoints"] as? [[String: Any]] {
-            notes.knowledgePoints = points.compactMap { item in
+            notes.knowledgePoints = points.compactMap { item -> KnowledgePoint? in
                 guard let title = item["title"] as? String, !title.isEmpty else { return nil }
                 return KnowledgePoint(
                     title: title,
