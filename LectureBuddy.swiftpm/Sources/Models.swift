@@ -28,6 +28,15 @@ struct NoteSection: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var title: String
     var points: [String] = []
+
+    init() { title = "" }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        points = try c.decodeIfPresent([String].self, forKey: .points) ?? []
+    }
 }
 
 /// 课堂的大框架：先让学生看懂这节课在讲什么、怎么串起来的，再去看细节
@@ -38,6 +47,22 @@ struct FrameworkItem: Identifiable, Codable, Hashable {
     var role: String = ""
     /// 这一环里的关键点（对应后面章节的细节）
     var keyPoints: [String] = []
+
+    init() { title = "" }
+
+    init(title: String, role: String = "", keyPoints: [String] = []) {
+        self.title = title
+        self.role = role
+        self.keyPoints = keyPoints
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        role = try c.decodeIfPresent(String.self, forKey: .role) ?? ""
+        keyPoints = try c.decodeIfPresent([String].self, forKey: .keyPoints) ?? []
+    }
 }
 
 struct Framework: Codable, Hashable {
@@ -48,6 +73,17 @@ struct Framework: Codable, Hashable {
     /// 这节课到底想解决什么问题
     var problem: String = ""
     var isEmpty: Bool { bigPicture.isEmpty && flow.isEmpty }
+
+    init() {}
+
+    /// 旧数据里 framework 可能只有部分字段（比如没存 flow），
+    /// 自动合成的 Codable 遇到缺字段直接报错，整个库就读不出来了。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bigPicture = try c.decodeIfPresent(String.self, forKey: .bigPicture) ?? ""
+        flow = try c.decodeIfPresent([FrameworkItem].self, forKey: .flow) ?? []
+        problem = try c.decodeIfPresent(String.self, forKey: .problem) ?? ""
+    }
 }
 
 /// 老师讲的知识点，配上学生自己会遇到的疑问和具体例子
@@ -61,6 +97,24 @@ struct KnowledgePoint: Identifiable, Codable, Hashable {
     /// 结合课上内容的举例/类比，要具体
     var example: String = ""
     var isEmpty: Bool { title.isEmpty }
+
+    init() { title = "" }
+
+    init(title: String, detail: String = "", confusion: String = "", example: String = "") {
+        self.title = title
+        self.detail = detail
+        self.confusion = confusion
+        self.example = example
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        confusion = try c.decodeIfPresent(String.self, forKey: .confusion) ?? ""
+        example = try c.decodeIfPresent(String.self, forKey: .example) ?? ""
+    }
 }
 
 /// 一道练习：答案和讲解分开，方便先自己做再看
@@ -70,6 +124,22 @@ struct ExerciseItem: Identifiable, Codable, Hashable {
     var answer: String = ""
     /// 讲解：为什么是这个答案、常见错法在哪
     var explanation: String = ""
+
+    init() { question = "" }
+
+    init(question: String, answer: String = "", explanation: String = "") {
+        self.question = question
+        self.answer = answer
+        self.explanation = explanation
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        question = try c.decodeIfPresent(String.self, forKey: .question) ?? ""
+        answer = try c.decodeIfPresent(String.self, forKey: .answer) ?? ""
+        explanation = try c.decodeIfPresent(String.self, forKey: .explanation) ?? ""
+    }
 }
 
 /// 课后自测：优先考“能不能用这节课的思路解题”，而不是背原话
@@ -79,6 +149,14 @@ struct PracticeSet: Codable, Hashable {
     /// 动笔的综合题
     var problems: [ExerciseItem] = []
     var isEmpty: Bool { quickChecks.isEmpty && problems.isEmpty }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        quickChecks = try c.decodeIfPresent([ExerciseItem].self, forKey: .quickChecks) ?? []
+        problems = try c.decodeIfPresent([ExerciseItem].self, forKey: .problems) ?? []
+    }
 
     /// 模型给的练习数组可能缺字段、也可能是纯字符串，尽量宽容地接住
     static func parseItems(_ raw: Any?) -> [ExerciseItem] {
@@ -103,12 +181,40 @@ struct StudyCard: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var question: String
     var answer: String
+
+    init() { question = ""; answer = "" }
+
+    init(question: String, answer: String) {
+        self.question = question
+        self.answer = answer
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        question = try c.decodeIfPresent(String.self, forKey: .question) ?? ""
+        answer = try c.decodeIfPresent(String.self, forKey: .answer) ?? ""
+    }
 }
 
 struct GlossaryItem: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var term: String
     var explain: String
+
+    init() { term = ""; explain = "" }
+
+    init(term: String, explain: String) {
+        self.term = term
+        self.explain = explain
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        term = try c.decodeIfPresent(String.self, forKey: .term) ?? ""
+        explain = try c.decodeIfPresent(String.self, forKey: .explain) ?? ""
+    }
 }
 
 struct LessonNotes: Codable, Hashable {
@@ -357,6 +463,20 @@ struct TutorEntry: Identifiable, Codable, Hashable {
     var usedVision: Bool = false
 
     var isEmpty: Bool { steps.isEmpty && followUpQuestion.isEmpty }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        imageFileName = try c.decodeIfPresent(String.self, forKey: .imageFileName)
+        selectionText = try c.decodeIfPresent(String.self, forKey: .selectionText) ?? ""
+        pageIndex = try c.decodeIfPresent(Int.self, forKey: .pageIndex) ?? 1
+        steps = try c.decodeIfPresent([TutorStep].self, forKey: .steps) ?? []
+        followUpQuestion = try c.decodeIfPresent(String.self, forKey: .followUpQuestion) ?? ""
+        usedVision = try c.decodeIfPresent(Bool.self, forKey: .usedVision) ?? false
+    }
 }
 
 /// 讲解链里的一步
@@ -364,4 +484,18 @@ struct TutorStep: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var title: String
     var body: String
+
+    init() { title = ""; body = "" }
+
+    init(title: String, body: String) {
+        self.title = title
+        self.body = body
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+    }
 }
