@@ -31,6 +31,11 @@ struct NoteSection: Identifiable, Codable, Hashable {
 
     init() { title = "" }
 
+    init(title: String, points: [String] = []) {
+        self.title = title
+        self.points = points
+    }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
