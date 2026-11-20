@@ -1,7 +1,25 @@
 # LectureBuddy 交接文档
 
 给接手的人（Codex / GPT / 其他 AI 或开发者）看的现状说明。
-最后更新：2026-11-20，对应 commit `2e169d1`。
+最后更新：2026-11-20。
+
+---
+
+## 0. 仓库边界（最先读这段）
+
+这个仓库里**只有 iOS 项目是活的**。其余都是历史遗留，不要参考、不要改：
+
+| 路径 | 状态 |
+|---|---|
+| `LectureBuddy.swiftpm/` `CI/` `project.yml` `.github/` `HANDOFF.md` | ✅ 现在的项目，只改这些 |
+| `android/` `build-apk.ps1` `dist/` | ❌ 早期尝试过的安卓版，已废弃 |
+| `*.png` `*.jpg` `ui*.xml` `tmp-settings.pb` | ❌ 调试截图/临时文件，不是资产 |
+| `fix-*.bat` `start-sideloadly-admin.bat` `push.ps1` | ❌ Windows 临时脚本，与代码无关 |
+| `platform-tools/` `tools/` `ui-preview/` | ❌ 安卓工具链残留 |
+
+想清理仓库的话**先问用户**，不要自作主张删。
+
+
 
 ---
 
