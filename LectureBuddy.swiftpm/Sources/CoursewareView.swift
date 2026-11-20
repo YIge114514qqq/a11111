@@ -16,6 +16,7 @@ struct CoursewareView: View {
     @EnvironmentObject var store: LessonStore
     @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var showImporter = false
     @State private var pdfDocument: PDFDocument?
@@ -23,6 +24,7 @@ struct CoursewareView: View {
     @State private var pageCount = 0
     @State private var pageImage: UIImage?
     @State private var canvasHandle: CanvasHandle?
+    @State private var drawingIsLoaded = false
     @State private var tool: PencilCanvasView.CanvasTool = .pen
     @State private var loadError: String?
 
@@ -53,7 +55,10 @@ struct CoursewareView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("关闭") { dismiss() }
+                Button("关闭") {
+                    saveCurrentDrawing()
+                    dismiss()
+                }
             }
         }
         .fileImporter(isPresented: $showImporter,
@@ -65,6 +70,18 @@ struct CoursewareView: View {
             tutorSheet
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .onDisappear {
+            saveCurrentDrawing()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { saveCurrentDrawing() }
+        }
+        .onChange(of: canvasHandle?.canvas != nil) { _, isReady in
+            // 画布句柄异步建立，首次 onAppear 时可能还不能恢复笔迹。
+            if isReady, !drawingIsLoaded, let lesson {
+                restoreDrawing(lesson: lesson, page: pageIndex)
+            }
         }
     }
 
@@ -178,6 +195,8 @@ struct CoursewareView: View {
 extension CoursewareView {
 
     private func loadDocument(fileName: String, lesson: Lesson) {
+        // 换课件时不能把旧画布写到新课件；恢复完成后才允许保存。
+        drawingIsLoaded = false
         let url = store.fileURL(named: fileName)
         guard FileManager.default.fileExists(atPath: url.path) else {
             loadError = "课件文件不见了（可能换机时没带过来）。"
@@ -204,7 +223,7 @@ extension CoursewareView {
     private func goTo(_ index: Int, lesson: Lesson) {
         let target = max(0, min(index, max(pageCount - 1, 0)))
         // 翻页前先把当前页的笔画存回这节课，否则翻回来就没了
-        saveCurrentDrawing(lesson: lesson)
+        saveCurrentDrawing()
         pageIndex = target
         if let doc = pdfDocument, let page = doc.page(at: target) {
             pageImage = render(page: page)
@@ -212,9 +231,12 @@ extension CoursewareView {
         restoreDrawing(lesson: lesson, page: target)
     }
 
-    private func saveCurrentDrawing(lesson: Lesson) {
-        guard let data = canvasHandle?.drawingData() else { return }
-        var updated = lesson
+    private func saveCurrentDrawing() {
+        // 从 store 取最新课程，避免生命周期回调把其他刚保存的内容覆盖掉。
+        guard drawingIsLoaded, let data = canvasHandle?.drawingData(),
+              var updated = lesson else { return }
+        if pageIndex < updated.annotations.count,
+           updated.annotations[pageIndex] == data { return }
         while updated.annotations.count <= pageIndex {
             updated.annotations.append(Data())
         }
@@ -223,8 +245,11 @@ extension CoursewareView {
     }
 
     private func restoreDrawing(lesson: Lesson, page: Int) {
+        drawingIsLoaded = false
+        guard let canvasHandle, canvasHandle.canvas != nil else { return }
         let data = page < lesson.annotations.count ? lesson.annotations[page] : nil
-        canvasHandle?.loadDrawing(data)
+        canvasHandle.loadDrawing(data)
+        drawingIsLoaded = true
     }
 
     /// 把 PDF 页渲染成固定尺寸的图片。
@@ -388,8 +413,8 @@ extension CoursewareView {
             tutorFollowUp = parsed.followUp
             usedVision = visionUsed
 
-            // 存进这节课，复习时能回看当时不理解的是什么
-            var updated = lesson
+            // 请求期间可能已保存批注，追加讲解时要保留最新课程内容。
+            guard var updated = self.lesson else { return }
             var entry = TutorEntry()
             entry.pageIndex = pageIndex + 1
             entry.selectionText = ocr.text
