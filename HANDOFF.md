@@ -273,15 +273,51 @@ OK: plist 关键项齐全
 
 ### 我自己认为该做但没做的
 
+### 【第一优先】课件批注丢最后一页——已定位，可直接修
+
+**问题**：批注只在翻页时存。用户看完最后一页直接点「关闭」，这页的笔迹全丢。
+
+**证据**：`CoursewareView.swift` 里 `grep onDisappear` **无任何结果**。
+保存只发生在 `goTo()`（第 207 行）。
+
+**要改的地方**（`LectureBuddy.swiftpm/Sources/CoursewareView.swift`）：
+
+1. 在 `body` 的 `Group { ... }` 后面加：
+   ```swift
+   .onDisappear {
+       if let lesson { saveCurrentDrawing(lesson: lesson) }
+   }
+   ```
+   （参考位置：`body` 在第 44 行，`.sheet` 结尾在第 68 行附近，加在那之后）
+
+2. **更要紧的**：切到后台也可能被杀。用 `scenePhase`：
+   ```swift
+   @Environment(\.scenePhase) private var scenePhase
+   ```
+   然后加 `.onChange(of: scenePhase) { _, phase in
+       if phase != .active, let lesson { saveCurrentDrawing(lesson: lesson) }
+   }`
+
+3. `saveCurrentDrawing` 本身已经是幂等的（写 `lesson.annotations[pageIndex]` 再 `store.save`），
+   多调几次不会坏，但会反复写盘。如果担心，可先比对 `canvasHandle?.drawingData()`
+   和现有的 `lesson.annotations[pageIndex]`，相同就跳过。
+
+**验证**：CI 只能证明能编译。**必须让用户在真机试**：
+打开课件 → 在第 2 页写字 → 直接点「关闭」（不翻页）→ 重新进入 → 看笔迹还在不在。
+
+### 其他待办
+
 - [ ] **数字笔迹的 `canvasViewDidEndUsingTool` 兜底路径**其实触发不到（圈选时
       `.pencilOnly` 下笔画仍会记录，但 UI 没提示）。要么保留要么删，现在是「能用但含糊」。
-- [ ] **课件批注持久化**依赖翻页时 `saveCurrentDrawing`。如果用户直接退出不做翻页，
-      最后一页的笔迹可能没存。应该在 `onDisappear` 也存一次。
 - [ ] **`TutorChain.parse` 的六步拆分**只测了三种格式（①②③ / 数字编号 / 无格式），
       模型如果返回 markdown 表格会退化成单步。可以加强，但不要为它牺牲「绝不丢内容」。
-- [ ] **`liveSession.swift` 那条备用链路**和主链路有重复代码，未来可以合并或删除。
+- [ ] **`LiveSession.swift` 那条备用链路**和主链路有重复代码，未来可以合并或删除。
+      先确认还有谁在用，`LiveView` 可能仍然引用得到。
+- [ ] **翻译提示词需要真实课堂样本**。已经针对韩语敬语层级、省略主语、连接词、
+      汉字词、指示词重写过，但没有任何真实字幕样本可以调。不急，等用户上课攒几节。
 
 ### 已知的脆弱点
+
 
 - 圈选坐标依赖 `container.bounds`，如果以后改成非固定尺寸画布，裁剪会偏
 - `CoursewareView` 目前只支持单页批注的即时保存，多页之间靠翻页触发
@@ -291,11 +327,14 @@ OK: plist 关键项齐全
 
 ## 11. 给接手者的建议
 
-1. **先跑一遍 CI 的测试命令**，确认环境能编译。改动模型字段后必须重跑。
+1. **本机编译不了**（Windows，无 Swift）。验证只能 `git push` 完跑 `./check-ci.sh`。
+   看到 `>>> 通过` 才算过，别凭“看起来对”下结论。上一任接手人在这里连错 4 次。
 2. **不要简化宽容解码**。这不是防御性编程洁癖，是修过真实数据丢失事故的结果。
 3. **改画布几何前先读第 6 节**。这里的每一行坐标换算都有原因。
 4. **测试文件不能引用 App 内类型**（只编译三个源文件）。
 5. 用户是留学生，不是开发者。报错信息一律写成中文、说清下一步该干什么。
+6. **改完必须告诉用户怎么在真机验证**。CI 只能证明能编译，证明不了手感、
+   麦克风、网络、笔迹对得上。历史上这些全都出过问题。
 
 ---
 

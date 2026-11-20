@@ -1,9 +1,18 @@
 #!/bin/bash
-# 看最近一次 CI 的结果。不打印 token。
-export GH_TOKEN=$(tr -d ' \r\n' < LOCAL-TOKEN.txt)
+# 看最近一次 CI 的结果。不打印 token。可以从任何目录运行。
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+TOKENFILE="$HERE/LOCAL-TOKEN.txt"
+
+if [ ! -f "$TOKENFILE" ]; then
+  echo "找不到 $TOKENFILE"
+  echo "（这个文件被 .gitignore 挡住，不入库；丢了就找人要 token 重新写入）"
+  exit 1
+fi
+
+export GH_TOKEN=$(tr -d ' \r\n' < "$TOKENFILE")
 REPO="YIge114514qqq/a11111"
 
-if [ -z "$GH_TOKEN" ]; then echo "找不到 LOCAL-TOKEN.txt"; exit 1; fi
+if [ -z "$GH_TOKEN" ]; then echo "$TOKENFILE 是空的"; exit 1; fi
 
 RUN=$(gh run list --repo "$REPO" --limit 1 --json databaseId,status,conclusion,headSha,displayTitle \
       --jq '.[0] | "\(.databaseId)|\(.status)|\(.conclusion)|\(.headSha[0:7])|\(.displayTitle)"')
