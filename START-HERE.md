@@ -6,28 +6,21 @@
 
 **你的第一步：不要写代码，先读和学习。**
 
-1. 读仓库根目录的 `HANDOFF.md`，从头读完 12 节。这是唯一权威的现状说明。
+1. 读仓库根目录的 `HANDOFF.md`，从头读到尾。这是唯一权威的现状说明。
 2. 特别是这几节，读不懂就别动手：
    - 第 0 节 仓库边界（哪些目录是废弃的）
+   - 第 2 节 验证方式（**这台机器没有 Swift，别试**）
    - 第 5 节 加字段必须手写解码（这关系到用户会不会丢数据）
    - 第 6 节 画布几何（这里已经崩过两次）
-3. 然后自己跑一遍验证，确认你的环境能编译：
+3. 读 `VERIFY.md`，搞清楚你怎么验证改动。
 
-```bash
-swiftc LectureBuddy.swiftpm/Sources/Models.swift \
-        LectureBuddy.swiftpm/Sources/NetworkErrorMessage.swift \
-        LectureBuddy.swiftpm/Sources/TutorChain.swift \
-        CI/Tests/tutor.swift \
-        CI/Tests/main.swift -o build-tests/model-tests
-./build-tests/model-tests
-```
-
-看到 `PASS: 65 model checks` 之类才算环境正常。**跑不通就先说，不要硬改代码。**
+**重要：这台是 Windows 机器，没有 Swift，也装不了能用的（这个是 iOS 项目，依赖 SwiftUI/UIKit）。别去装 Swift，别试 `swiftc`，也别声称跑过测试。唯一的验证途径是推到 GitHub 让云 Mac 跑 CI。**
 
 4. 读完后，用你自己的话向我复述：
    - 这个 App 是干什么的、给谁用
    - 修改数据模型时必须遵守什么规则，为什么
    - 现在有哪些功能是"代码写了但还没在真机上验证过"的
+   - 你打算怎么验证你的改动
    - 你打算先做哪件事，为什么
 
 **复述完之后等我确认，再开始改。**
@@ -35,7 +28,7 @@ swiftc LectureBuddy.swiftpm/Sources/Models.swift \
 ## 干活时的规矩
 
 - **一次只做一件事**，做完告诉我改了什么、怎么验证的、还有什么不确定。不要一口气改五个文件再说。
-- **先跑测试再提交**。上面那条 swiftc 命令必须过。
+- **每次改完推 CI**，看到日志里有 `PASS:` 和 `BUILD SUCCEEDED` 才算通过。具体做法见 `VERIFY.md`。
 - **不许简化宽容解码**（HANDOFF 第 5 节）。看着像多余的 `decodeIfPresent` 其实是修过真实数据丢失事故的。
 - **不许删用户数据相关逻辑**，遇到看不懂的就问。
 - 改了模型字段，必须同时加一条"缺字段也能解码"的测试。
@@ -54,7 +47,7 @@ swiftc LectureBuddy.swiftpm/Sources/Models.swift \
 
 # 备选：如果你想让 Codex 自己判断优先级
 
-把上面第 3 条换成：
+把上面"当前优先级"整段换成：
 
 > 读完后，按 `HANDOFF.md` 第 10 节给我一个排期建议：哪些能马上做、哪些必须要我先提供信息（比如 API Key、真机反馈）、哪些其实不该做。先别动手改代码。
 
@@ -62,7 +55,8 @@ swiftc LectureBuddy.swiftpm/Sources/Models.swift \
 
 # 提醒（不用发给 Codex）
 
-- **它看不到这个对话**，也看不到你之前跟我说的需求细节。文档里我只写了结论，如果你还有额外要求（比如"翻译要更口语化""笔记要短一点"），要单独告诉它。
-- **它可能想清理 `android/` 那些垃圾**。我已在文档第 0 节写了"先问用户"。它要是没问就删，立刻叫停。
-- **它跑不了真机**。所有"手感""麦克风""断网重连"这类事，最后还是得你装上去试。
-- 它如果开始改 `Models.swift` 的字段却没有手写 `init(from:)`，**直接打断它**——那是丢数据的入口。
+- **它看不到你和我的对话**。文档里只有结论，如果你还有额外要求（比如"翻译要更口语化""笔记短一点"），要单独告诉它。
+- **上一轮它卡在 `swiftc` 上是对的**——它没有假装通过。这次的 `VERIFY.md` 就是为了让它知道正确路径。
+- **它可能想清理 `android/` 那些垃圾**。第 0 节写了"先问用户"。它要是没问就删，立刻叫停。
+- **它跑不了真机**。手感、麦克风、断网重连，最后还得你装上去试。
+- 它如果改 `Models.swift` 的字段却没手写 `init(from:)`，**直接打断它**——那是丢数据的入口。

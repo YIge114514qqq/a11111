@@ -50,10 +50,18 @@ project.yml                   XcodeGen 配置，用来出真机 ipa
 
 两条构建路径：
 
-- **Xcode 直接打开** `LectureBuddy.swiftpm` → 选自己 Team → 跑真机
+- **Xcode 直接打开** `LectureBuddy.swiftpm` → 选自己 Team → 跑真机（**需要 Mac**）
 - **CI**：push 到 main 自动跑，产出无签名 ipa（artifact 名 `unsigned-ipa`）
 
-CI 里的测试命令（改了模型字段就要让它继续过）：
+### ⚠️ 当前开发机是 Windows，没有 Swift
+
+本机 `swiftc` / `swift` / `xcodebuild` **全部不存在**，而且**装不了能用的**——
+代码依赖 SwiftUI/UIKit/PencilKit/PDFKit/AVFoundation，这些只在 macOS 上有。
+
+**所以验证只能推到 GitHub 让云 Mac 跑。完整流程见 `VERIFY.md`。**
+不要试图在本机装 Swift，也不要声称跑过测试（除非在 CI 日志里看到 `PASS:`）。
+
+CI 里实际执行的测试命令（仅供了解；本机跑不了）：
 
 ```bash
 swiftc LectureBuddy.swiftpm/Sources/Models.swift \
