@@ -50,21 +50,42 @@ done
 
 ### 怎么看结果
 
-需要 GitHub token（向用户要，**不要写进任何文件，这个仓库是公开的**）：
+**直接用仓库根目录的脚本，不要自己拼 gh 命令：**
 
 ```bash
-export GH_TOKEN="<向用户要>"
-gh run list  --repo YIge114514qqq/a11111 --limit 3
-gh run watch --repo YIge114514qqq/a11111        # 实时跟
-gh run view  --repo YIge114514qqq/a11111 --log   # 看全部日志
+./check-ci.sh
 ```
 
-只看关键行：
+它会自动读本机凭据，打印 commit、状态、六项检查、失败时的具体报错，最后一行给结论：
 
-```bash
-gh run view --repo YIge114514qqq/a11111 --log \
-  | grep -iE "PASS:|FAIL|BUILD SUCCEEDED|BUILD FAILED|error:|OK: plist"
 ```
+commit   3c71e00
+标题     Say plainly that this machine cannot compile Swift
+状态     completed / success
+链接     https://github.com/YIge114514qqq/a11111/actions/runs/44753747884
+-----------------------------------------------
+【测试与构建】
+PASS: 65 model checks
+PASS: tutor chain checks
+PASS: tutor log checks
+** BUILD SUCCEEDED **
+** BUILD SUCCEEDED **
+PASS: plist 关键项齐全
+
+>>> 通过
+```
+
+失败时它会在【报错】段打印真实的编译错误，例如：
+
+```
+LectureBuddy.swiftpm/Sources/Models.swift:276:35: error: argument passed to call that takes no arguments
+>>> 失败，看上面的【报错】
+```
+
+凭据放在 `LOCAL-TOKEN.txt`，已被 `.gitignore` 挡住，**不会被提交**。
+不要打印它、不要贴它、不要复制到别的文件。
+
+如果还没出结果，脚本会说"还没跑完"，等 3 分钟再执行一次。
 
 ### 什么算通过
 

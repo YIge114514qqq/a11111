@@ -29,4 +29,7 @@ ui-preview/
 shot*.png
 shot*.jpg
 ui*.xml
-tmp-settings.pb
+tmp-settings.pb# 本机 token（绝不提交）
+LOCAL-TOKEN.txt
+.gh-token
+.env

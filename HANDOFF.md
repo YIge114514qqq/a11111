@@ -58,7 +58,15 @@ project.yml                   XcodeGen 配置，用来出真机 ipa
 本机 `swiftc` / `swift` / `xcodebuild` **全部不存在**，而且**装不了能用的**——
 代码依赖 SwiftUI/UIKit/PencilKit/PDFKit/AVFoundation，这些只在 macOS 上有。
 
-**所以验证只能推到 GitHub 让云 Mac 跑。完整流程见 `VERIFY.md`。**
+**所以验证只能推到 GitHub 让云 Mac 跑。**
+
+```bash
+git add -A && git commit -m "……" && git push origin main
+sleep 240 && ./check-ci.sh      # 打印六项检查 + 结论
+```
+
+`check-ci.sh` 会自动读 `LOCAL-TOKEN.txt`（在 `.gitignore` 里，不会提交）。
+完整流程和"什么算通过"见 `VERIFY.md`。
 不要试图在本机装 Swift，也不要声称跑过测试（除非在 CI 日志里看到 `PASS:`）。
 
 CI 里实际执行的测试命令（仅供了解；本机跑不了）：
