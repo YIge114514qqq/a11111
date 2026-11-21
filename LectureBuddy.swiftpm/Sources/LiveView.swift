@@ -130,15 +130,16 @@ struct LiveView: View {
     private func saveLiveLesson(_ completion: LiveTranslateSession.Completion) {
         guard savedLiveSessionID != completion.id else { return }
         savedLiveSessionID = completion.id
-        // 连不上服务器（401/断网）时只有几秒空录音，没有任何字幕：
-        // 这种不该在课程列表里多出一条空课，也应该把没人用的录音删掉。
-        guard !completion.lines.isEmpty || completion.audioFileName != nil else { return }
-        guard !completion.lines.isEmpty else {
-            if let name = completion.audioFileName {
-                try? FileManager.default.removeItem(at: store.audioURL(named: name))
+        // 识别失败不代表没录到声音，不能因为没有字幕就删除课堂录音。
+        // WAV 头固定为 44 字节；只有两者都为空才跳过，文件信息读不到时保守保留。
+        let hasAudio = completion.audioFileName.map { name in
+            let url = store.audioURL(named: name)
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+                return FileManager.default.fileExists(atPath: url.path)
             }
-            return
-        }
+            return size > 44
+        } ?? false
+        guard !completion.lines.isEmpty || hasAudio else { return }
         var lesson = Lesson(
             title: defaultLessonTitle(),
             duration: completion.duration,
