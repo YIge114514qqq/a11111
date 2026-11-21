@@ -258,6 +258,7 @@ struct LessonDetailView: View {
     private func generate(for lesson: Lesson) async {
         guard !generating, !lesson.lines.isEmpty, settings.hasAIConfiguration else { return }
         generating = true
+        defer { generating = false }
         generateError = nil
         do {
             let service = AIService(settings: settings)
@@ -265,13 +266,14 @@ struct LessonDetailView: View {
                 transcript: lesson.transcriptText,
                 language: settings.notesLanguage
             )
-            var updated = lesson
+            // 请求期间可能新增课件、批注或讲解，只把笔记合并到最新课程。
+            // 课程已删除或页面任务被取消时，不再用旧快照把它写回来。
+            guard !Task.isCancelled, var updated = self.lesson else { return }
             updated.notes = notes
             store.save(updated)
         } catch {
             generateError = friendlyErrorMessage(error)
         }
-        generating = false
     }
 
     private func block<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
