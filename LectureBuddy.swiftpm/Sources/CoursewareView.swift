@@ -34,6 +34,7 @@ struct CoursewareView: View {
     @State private var tutorFollowUp = ""
     @State private var usedVision = false
     @State private var showTutorSheet = false
+    @State private var selectedImage: UIImage?
 
     /// A4 比例，PDF 常用尺寸；批注坐标系固定用它
     private let canvasSize = CGSize(width: 595, height: 842)
@@ -328,12 +329,14 @@ extension CoursewareView {
 extension CoursewareView {
 
     private func handleSelection(_ rect: CGRect, lesson: Lesson) {
+        selectedImage = nil
         guard let crop = cropImage(rect: rect) else {
             tutorError = "没能截到这块内容，放大一点再圈一次。"
             showTutorSheet = true
             return
         }
         tutorBusy = true
+        selectedImage = crop
         tutorError = nil
         tutorSteps = []
         tutorFollowUp = ""
@@ -343,16 +346,18 @@ extension CoursewareView {
     }
 
     /// 从当前页面图里裁出圈选区域。
-    /// pageImage 是 2x 渲染的，所以坐标要乘 scale，否则裁出来会偏。
+    /// UIImage.size 是逻辑点，CGImage 裁剪使用像素，必须按实际像素宽高换算。
     private func cropImage(rect: CGRect) -> UIImage? {
         guard let pageImage, let cg = pageImage.cgImage else { return nil }
-        let scale = pageImage.size.width / canvasSize.width
-        let scaled = CGRect(x: rect.origin.x * scale,
-                            y: rect.origin.y * scale,
-                            width: rect.width * scale,
-                            height: rect.height * scale)
-        guard scaled.width >= 8, scaled.height >= 8,
-              let cropped = cg.cropping(to: scaled) else { return nil }
+        let selection = rect.standardized.intersection(CGRect(origin: .zero, size: canvasSize))
+        guard !selection.isNull, selection.width >= 8, selection.height >= 8 else { return nil }
+        let scaleX = CGFloat(cg.width) / canvasSize.width
+        let scaleY = CGFloat(cg.height) / canvasSize.height
+        let scaled = CGRect(x: selection.minX * scaleX,
+                            y: selection.minY * scaleY,
+                            width: selection.width * scaleX,
+                            height: selection.height * scaleY).integral
+        guard let cropped = cg.cropping(to: scaled) else { return nil }
         return UIImage(cgImage: cropped, scale: 1, orientation: .up)
     }
 
@@ -435,6 +440,14 @@ extension CoursewareView {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let selectedImage {
+                        Text("本次圈选").font(.caption).foregroundStyle(.secondary)
+                        Image(uiImage: selectedImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: 200)
+                            .accessibilityLabel("发送给讲解模型的圈选截图")
+                    }
                     if tutorBusy {
                         HStack(spacing: 10) {
                             ProgressView()
