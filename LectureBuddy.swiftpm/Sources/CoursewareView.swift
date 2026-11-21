@@ -35,6 +35,8 @@ struct CoursewareView: View {
     @State private var usedVision = false
     @State private var showTutorSheet = false
     @State private var selectedImage: UIImage?
+    @State private var tutorRequestID: UUID?
+    @State private var tutorTask: Task<Void, Never>?
 
     /// A4 比例，PDF 常用尺寸；批注坐标系固定用它
     private let canvasSize = CGSize(width: 595, height: 842)
@@ -74,6 +76,10 @@ struct CoursewareView: View {
         }
         .onDisappear {
             saveCurrentDrawing()
+            tutorTask?.cancel()
+            tutorTask = nil
+            tutorRequestID = nil
+            tutorBusy = false
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { saveCurrentDrawing() }
@@ -329,6 +335,15 @@ extension CoursewareView {
 extension CoursewareView {
 
     private func handleSelection(_ rect: CGRect, lesson: Lesson) {
+        tutorTask?.cancel()
+        tutorTask = nil
+        let requestID = UUID()
+        tutorRequestID = requestID
+        tutorBusy = false
+        tutorError = nil
+        tutorSteps = []
+        tutorFollowUp = ""
+        usedVision = false
         selectedImage = nil
         guard let crop = cropImage(rect: rect) else {
             tutorError = "没能截到这块内容，放大一点再圈一次。"
@@ -337,12 +352,11 @@ extension CoursewareView {
         }
         tutorBusy = true
         selectedImage = crop
-        tutorError = nil
-        tutorSteps = []
-        tutorFollowUp = ""
-        usedVision = false
         showTutorSheet = true
-        Task { await runTutor(crop: crop, lesson: lesson) }
+        let pageNumber = pageIndex + 1
+        tutorTask = Task {
+            await runTutor(crop: crop, lesson: lesson, pageNumber: pageNumber, requestID: requestID)
+        }
     }
 
     /// 从当前页面图里裁出圈选区域。
@@ -362,11 +376,18 @@ extension CoursewareView {
     }
 
     @MainActor
-    private func runTutor(crop: UIImage, lesson: Lesson) async {
-        defer { tutorBusy = false }
+    private func runTutor(crop: UIImage, lesson: Lesson, pageNumber: Int, requestID: UUID) async {
+        defer {
+            if tutorRequestID == requestID {
+                tutorBusy = false
+                tutorTask = nil
+            }
+        }
 
         // 1. OCR：先看圈到的是什么字，顺便决定要不要花钱看图
         let ocr = await OCRService.recognize(in: crop)
+        guard !Task.isCancelled, tutorRequestID == requestID,
+              self.lesson?.coursewareFileName == lesson.coursewareFileName else { return }
         let looksFormula = TutorChain.looksLikeFormulaOrDiagram(ocr.text)
         let needsVision = TutorChain.shouldUseVision(
             ocrConfidence: ocr.confidence,
@@ -378,7 +399,7 @@ extension CoursewareView {
             subject: settings.courseTopic,
             selectionText: ocr.text,
             frameworkSummary: lesson.notes?.framework.bigPicture ?? "",
-            pageIndex: pageIndex + 1
+            pageIndex: pageNumber
         )
 
         do {
@@ -413,15 +434,18 @@ extension CoursewareView {
                 return
             }
 
+            // 页码来自圈选时的快照；旧请求或已更换课件的结果不能写进当前记录。
+            guard !Task.isCancelled, tutorRequestID == requestID,
+                  var updated = self.lesson,
+                  updated.coursewareFileName == lesson.coursewareFileName else { return }
             let parsed = TutorChain.parse(answer)
             tutorSteps = parsed.steps
             tutorFollowUp = parsed.followUp
             usedVision = visionUsed
 
             // 请求期间可能已保存批注，追加讲解时要保留最新课程内容。
-            guard var updated = self.lesson else { return }
             var entry = TutorEntry()
-            entry.pageIndex = pageIndex + 1
+            entry.pageIndex = pageNumber
             entry.selectionText = ocr.text
             entry.steps = parsed.steps
             entry.followUpQuestion = parsed.followUp
@@ -432,6 +456,7 @@ extension CoursewareView {
             updated.tutorLog.insert(entry, at: 0)
             store.save(updated)
         } catch {
+            guard !Task.isCancelled, tutorRequestID == requestID else { return }
             tutorError = friendlyErrorMessage(error)
         }
     }
