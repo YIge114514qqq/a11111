@@ -24,6 +24,92 @@ struct CaptionLine: Identifiable, Codable, Hashable {
     }
 }
 
+/// 通过服务端消息 ID 关联同一段音频的原文和译文，两边可以独立到达。
+struct LiveCaptionStream {
+    private(set) var lines: [CaptionLine] = []
+    private var rowIDs: [String] = []
+    private var rowByID: [String: Int] = [:]
+    private var sourceForTranslation: [String: String] = [:]
+    private var rowsWithSource: Set<String> = []
+    private var finalSources: Set<String> = []
+    private var finalTranslations: Set<String> = []
+
+    @discardableResult
+    mutating func apply(type: String, event: [String: Any], offset: TimeInterval) -> Bool {
+        if type == "conversation.item.created" {
+            guard let item = event["item"] as? [String: Any], item["role"] as? String == "assistant",
+                  let translationID = item["id"] as? String, !translationID.isEmpty,
+                  let sourceID = event["previous_item_id"] as? String, !sourceID.isEmpty else { return false }
+            return link(translationID: translationID, sourceID: sourceID)
+        }
+
+        guard let id = event["item_id"] as? String, !id.isEmpty else { return false }
+        let partial = { (event["text"] as? String ?? "") + (event["stash"] as? String ?? "") }
+        switch type {
+        case "conversation.item.input_audio_transcription.text":
+            guard !finalSources.contains(id) else { return false }
+            return update(source: partial(), rowID: id, offset: offset)
+        case "conversation.item.input_audio_transcription.completed":
+            finalSources.insert(id)
+            return update(source: event["transcript"] as? String ?? "", rowID: id, offset: offset)
+        case "response.text.text":
+            guard !finalTranslations.contains(id) else { return false }
+            return update(translation: partial(), rowID: sourceForTranslation[id] ?? id, offset: offset)
+        case "response.text.done":
+            finalTranslations.insert(id)
+            return update(translation: event["text"] as? String ?? "", rowID: sourceForTranslation[id] ?? id,
+                          offset: offset)
+        default:
+            return false
+        }
+    }
+
+    private mutating func update(source: String = "", translation: String = "", rowID: String,
+                                 offset: TimeInterval) -> Bool {
+        let source = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        let translation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty || !translation.isEmpty else { return false }
+
+        if let index = rowByID[rowID] {
+            var updated = lines[index]
+            if !source.isEmpty {
+                updated.text = source
+                rowsWithSource.insert(rowID)
+            }
+            if !translation.isEmpty {
+                updated.translation = translation
+                if !rowsWithSource.contains(rowID) { updated.text = translation }
+            }
+            guard updated != lines[index] else { return false }
+            lines[index] = updated
+        } else {
+            if !source.isEmpty { rowsWithSource.insert(rowID) }
+            rowByID[rowID] = lines.count
+            rowIDs.append(rowID)
+            lines.append(CaptionLine(text: source.isEmpty ? translation : source,
+                                     translation: translation.isEmpty ? nil : translation, offset: offset))
+        }
+        return true
+    }
+
+    private mutating func link(translationID: String, sourceID: String) -> Bool {
+        sourceForTranslation[translationID] = sourceID
+        guard translationID != sourceID,
+              let translationIndex = rowByID.removeValue(forKey: translationID) else { return false }
+        if let sourceIndex = rowByID[sourceID] {
+            lines[sourceIndex].translation = lines[translationIndex].translation ?? lines[sourceIndex].translation
+            lines[sourceIndex].offset = min(lines[sourceIndex].offset, lines[translationIndex].offset)
+            lines.remove(at: translationIndex)
+            rowIDs.remove(at: translationIndex)
+            for index in translationIndex..<rowIDs.count { rowByID[rowIDs[index]] = index }
+            return true
+        }
+        rowIDs[translationIndex] = sourceID
+        rowByID[sourceID] = translationIndex
+        return false
+    }
+}
+
 struct NoteSection: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var title: String

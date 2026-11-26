@@ -9,12 +9,12 @@ import Combine
 ///   response.text.*                                → 中文译文
 ///
 /// 所以字幕能做成「原文 + 译文」双语，而且不用再调一次大模型，
-/// 说完一句话基本同一时刻两边都出来（实测 0.1–0.2 秒）。
+/// 两种结果分别到达，用服务端消息 ID 配成一条字幕。
 @MainActor
 final class LiveTranslateSession: ObservableObject {
 
     @Published var isRecording = false
-    @Published var lines: [CaptionLine] = []
+    @Published private(set) var lines: [CaptionLine] = []
     @Published var errorMessage: String?
     @Published var elapsed: TimeInterval = 0
     /// 停止后能拿到的录音文件名（WAV）
@@ -54,10 +54,7 @@ final class LiveTranslateSession: ObservableObject {
     /// 本次已采集到的音频字节数（自检用：为 0 就说明麦克风根本没出声）
     @Published var audioBytes = 0
 
-    // 当前这句话的原文 / 译文
-    private var curSource = ""
-    private var curTranslation = ""
-    private var liveID: UUID?
+    private var captionStream = LiveCaptionStream()
 
     private let defaults = UserDefaults.standard
 
@@ -101,9 +98,7 @@ final class LiveTranslateSession: ObservableObject {
         socket = task
 
         lines = []
-        curSource = ""
-        curTranslation = ""
-        liveID = nil
+        captionStream = LiveCaptionStream()
         savedAudioName = nil
         lastErrorBody = ""
         startedAt = Date()
@@ -329,7 +324,11 @@ final class LiveTranslateSession: ObservableObject {
         flushTask?.cancel()
         flushTask = Task { @MainActor [weak self] in
             // 40ms 一帧：足够快，又不会把每块都单独打包。
-            try? await Task.sleep(nanoseconds: 40_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 40_000_000)
+            } catch {
+                return
+            }
             self?.flushAudio()
         }
     }
@@ -359,7 +358,10 @@ final class LiveTranslateSession: ObservableObject {
         let queued = pendingChunks
         pendingChunks.removeAll()
         for chunk in queued { sendAudio(chunk) }
-        if isStopping { send(#"{"event_id":"\#(nextID())","type":"session.finish"}"#) }
+        if isStopping {
+            flushAudio()
+            send(#"{"event_id":"\#(nextID())","type":"session.finish"}"#)
+        }
     }
 
     /// 用 async 循环收消息：比递归 receive 更稳，也不会堆栈溢出
@@ -423,47 +425,6 @@ final class LiveTranslateSession: ObservableObject {
             // session.updated 到了说明配置真的生效了（紧凑单行 JSON 才不会被忽略）
             status = "已就绪，正在听…"
 
-        case "input_audio_buffer.speech_started":
-            curSource = ""
-            curTranslation = ""
-
-        case "response.text.text":
-            let confirmed = obj["text"] as? String ?? ""
-            let stash = obj["stash"] as? String ?? ""
-            curTranslation = (confirmed + stash).trimmingCharacters(in: .whitespaces)
-            if !curTranslation.isEmpty { upsert(final: false) }
-
-        case "response.text.done":
-            let done = (obj["text"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            if !done.isEmpty { curTranslation = done }
-            // 等原文追上来再定稿，避免两者错配
-            let id = sessionID
-            let captionID = liveID
-            Task { @MainActor in
-                var waited = 0
-                // 最多等 1.5 秒；若这期间已经 stop()，就直接放弃，
-                // 否则会往已经清空的字幕里写孤行。
-                while waited < 15 && self.curSource.isEmpty && self.sessionID == id && self.liveID == captionID {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    waited += 1
-                }
-                guard self.sessionID == id, self.liveID == captionID, self.isRecording || self.isStopping else { return }
-                if !self.curTranslation.isEmpty { self.upsert(final: true) }
-            }
-
-        case "conversation.item.input_audio_transcription.text":
-            let confirmed = obj["text"] as? String ?? ""
-            let stash = obj["stash"] as? String ?? ""
-            curSource = (confirmed + stash).trimmingCharacters(in: .whitespaces)
-            if !curSource.isEmpty { upsert(final: false) }
-
-        case "conversation.item.input_audio_transcription.completed":
-            let t = (obj["transcript"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            if !t.isEmpty {
-                curSource = t
-                upsert(final: false)
-            }
-
         case "session.finished":
             if !isStopping { stop() }
             completeSession(sessionID)
@@ -477,32 +438,9 @@ final class LiveTranslateSession: ObservableObject {
             stop()
 
         default:
-            break
-        }
-    }
-
-    // MARK: - 字幕落地
-
-    private func upsert(final: Bool) {
-        let src = curSource.trimmingCharacters(in: .whitespaces)
-        let dst = curTranslation.trimmingCharacters(in: .whitespaces)
-        guard !src.isEmpty || !dst.isEmpty else { return }
-
-        let offset = Date().timeIntervalSince(startedAt)
-        let text = src.isEmpty ? dst : src
-
-        if let id = liveID, let idx = lines.firstIndex(where: { $0.id == id }) {
-            lines[idx].text = text
-            lines[idx].translation = dst.isEmpty ? nil : dst
-        } else {
-            var line = CaptionLine(text: text, translation: dst.isEmpty ? nil : dst)
-            line.offset = offset
-            lines.append(line)
-            liveID = line.id
-        }
-
-        if final {
-            liveID = nil
+            if captionStream.apply(type: type, event: obj, offset: Date().timeIntervalSince(startedAt)) {
+                lines = captionStream.lines
+            }
         }
     }
 

@@ -123,6 +123,73 @@ expect(!isRetryableNetworkError(NSError(domain: "MyApp", code: 401)), "app-level
 expect(!isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled)), "cancelled is not retried")
 expect(!isRetryableNetworkError(NSError(domain: NSURLErrorDomain, code: NSURLErrorUserCancelledAuthentication)), "cancelled auth is not retried")
 
+// MARK: - 实时字幕事件配对
+
+do {
+    var stream = LiveCaptionStream()
+    stream.apply(type: "input_audio_buffer.speech_started", event: ["item_id": "asr-1", "audio_start_ms": 1000], offset: 1)
+    stream.apply(type: "conversation.item.created", event: [
+        "previous_item_id": "asr-1",
+        "item": ["id": "translation-1", "role": "assistant"]
+    ], offset: 1.1)
+    stream.apply(type: "response.text.text", event: [
+        "response_id": "response-1", "item_id": "translation-1", "text": "下周", "stash": "有考试"
+    ], offset: 1.2)
+    expect(stream.lines.map(\.translation) == ["下周有考试"], "partial translation appears before ASR")
+
+    stream.apply(type: "input_audio_buffer.speech_started", event: ["item_id": "asr-2", "audio_start_ms": 2000], offset: 2)
+    stream.apply(type: "conversation.item.input_audio_transcription.text", event: [
+        "item_id": "asr-2", "text": "과제는", "stash": " 금요일까지"
+    ], offset: 2.1)
+    stream.apply(type: "conversation.item.created", event: [
+        "previous_item_id": "asr-2",
+        "item": ["id": "translation-2", "role": "assistant"]
+    ], offset: 2.2)
+    stream.apply(type: "response.text.done", event: [
+        "response_id": "response-2", "item_id": "translation-2", "text": "作业周五前交。"
+    ], offset: 2.3)
+
+    stream.apply(type: "response.text.done", event: [
+        "response_id": "response-1", "item_id": "translation-1", "text": "下周没有考试。"
+    ], offset: 2.4)
+    expect(stream.lines.map(\.translation) == ["下周没有考试。", "作业周五前交。"], "final translation publishes immediately without ASR")
+    stream.apply(type: "conversation.item.input_audio_transcription.completed", event: [
+        "item_id": "asr-1", "transcript": "다음 주에는 시험이 없습니다."
+    ], offset: 2.5)
+    stream.apply(type: "conversation.item.input_audio_transcription.completed", event: [
+        "item_id": "asr-2", "transcript": "과제는 금요일까지 제출하세요."
+    ], offset: 2.6)
+
+    stream.apply(type: "response.text.text", event: [
+        "response_id": "response-1", "item_id": "translation-1", "text": "下周有考试"
+    ], offset: 2.7)
+    stream.apply(type: "conversation.item.input_audio_transcription.text", event: [
+        "item_id": "asr-2", "text": "과제는 금요일까지"
+    ], offset: 2.8)
+    expect(stream.lines.map(\.text) == ["다음 주에는 시험이 없습니다.", "과제는 금요일까지 제출하세요."], "late ASR maps to the correct turn and final ASR survives stale partials")
+    expect(stream.lines.map(\.translation) == ["下周没有考试。", "作业周五前交。"], "interleaved final translations stay paired and survive stale partials")
+}
+
+do {
+    var stream = LiveCaptionStream()
+    stream.apply(type: "response.text.done", event: [
+        "response_id": "response-late", "item_id": "translation-late", "text": "今天不布置作业。"
+    ], offset: 1)
+    expect(stream.lines.map(\.translation) == ["今天不布置作业。"], "standalone final translation appears before association")
+    stream.apply(type: "conversation.item.input_audio_transcription.completed", event: [
+        "item_id": "asr-late", "transcript": "오늘은 과제가 없습니다."
+    ], offset: 1.1)
+
+    let association = [
+        "previous_item_id": "asr-late",
+        "item": ["id": "translation-late", "role": "assistant"]
+    ] as [String: Any]
+    stream.apply(type: "conversation.item.created", event: association, offset: 1.2)
+    stream.apply(type: "conversation.item.created", event: association, offset: 1.3)
+    expect(stream.lines.map(\.text) == ["오늘은 과제가 없습니다."], "late repeated association merges already received results into a single row")
+    expect(stream.lines.map(\.translation) == ["今天不布置作业。"], "late association preserves final translation")
+}
+
 print("PASS: \(checks) model checks")
 
 runTutorTests()
