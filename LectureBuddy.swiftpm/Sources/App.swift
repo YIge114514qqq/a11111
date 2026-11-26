@@ -7,11 +7,26 @@ struct LectureBuddyApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            initialView
                 .environmentObject(settings)
                 .environmentObject(store)
                 .preferredColorScheme(.dark)
         }
+    }
+
+    @ViewBuilder
+    private var initialView: some View {
+        #if DEBUG
+        // 模拟器回归测试直接打开预置课件，避免导航栏的可访问性差异影响圈选测试。
+        if ProcessInfo.processInfo.arguments.contains("-test-courseware"),
+           let lesson = store.lessons.first(where: { $0.title == "圈选回归课程" }) {
+            NavigationStack { CoursewareView(lessonID: lesson.id) }
+        } else {
+            RootView()
+        }
+        #else
+        RootView()
+        #endif
     }
 }
 

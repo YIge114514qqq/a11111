@@ -2,33 +2,20 @@ import XCTest
 
 final class CoursewareSelectionUITests: XCTestCase {
     @MainActor
-    func testCanEnterExitAndUseSelectionMode() throws {
+    func testCanEnterExitAndUseSelectionMode() {
         continueAfterFailure = false
         let app = XCUIApplication()
+        app.launchArguments = ["-test-courseware"]
         app.launch()
-
-        let courses = app.tabBars.buttons["课程"]
-        XCTAssertTrue(courses.waitForExistence(timeout: 10))
-        courses.tap()
-
-        // CI installs exactly one sample lesson in the simulator.
-        let lesson = app.cells.firstMatch
-        XCTAssertTrue(lesson.waitForExistence(timeout: 10))
-        lesson.tap()
-
-        let menu = app.buttons["lesson-more-actions"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 10))
-        menu.tap()
-        let openCourseware = app.buttons["打开课件"]
-        XCTAssertTrue(openCourseware.waitForExistence(timeout: 10))
-        openCourseware.tap()
 
         let select = app.buttons["圈选提问"]
         let pencil = app.buttons["铅笔"]
         let hint = app.staticTexts.containing(
             NSPredicate(format: "label BEGINSWITH %@", "单指从题目一角拖到对角")
         ).firstMatch
-        XCTAssertTrue(select.waitForExistence(timeout: 10))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND enabled == true"),
+                                               object: select)
+        wait(for: [ready], timeout: 10)
         select.tap()
         XCTAssertTrue(hint.waitForExistence(timeout: 5))
         pencil.tap()
