@@ -1,6 +1,8 @@
 import SwiftUI
 import UIKit
 import Foundation
+import PDFKit
+import UniformTypeIdentifiers
 
 struct LiveView: View {
     @EnvironmentObject var settings: AppSettings
@@ -34,6 +36,18 @@ struct LiveView: View {
     @State private var finishedLesson: Lesson?
     @State private var showLarge = false
     @State private var savedLiveSessionID: UUID?
+    @State private var classroomCourseware: ClassroomCourseware?
+    @State private var showCourseware = false
+    @State private var showCoursewareImporter = false
+    @State private var coursewarePage = 0
+    @State private var coursewareError: String?
+
+    private struct ClassroomCourseware {
+        let storedName: String
+        let displayName: String
+        let document: PDFDocument?
+        let image: UIImage?
+    }
 
     var body: some View {
         NavigationStack {
@@ -45,11 +59,12 @@ struct LiveView: View {
                         Button {
                             toggleRecording()
                         } label: {
-                            Label(isRecording ? "结束" : "开始",
+                            Label(live.isStopping ? "正在收尾…" : (isRecording ? "结束" : "开始"),
                                   systemImage: isRecording ? "stop.circle.fill" : "record.circle")
                             .labelStyle(.titleAndIcon)
                             .foregroundStyle(isRecording ? Color.red : Color.indigo)
                         }
+                        .disabled(live.isStopping)
                     }
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
@@ -59,6 +74,22 @@ struct LiveView: View {
                         }
                         .disabled(lines.isEmpty)
                     }
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        ToolbarItem(placement: .topBarLeading) {
+                            coursewareControl
+                        }
+                    }
+                }
+                .fileImporter(isPresented: $showCoursewareImporter, allowedContentTypes: [.pdf, .image]) {
+                    importClassroomCourseware($0)
+                }
+                .alert("无法打开课件", isPresented: Binding(
+                    get: { coursewareError != nil },
+                    set: { if !$0 { coursewareError = nil } }
+                )) {
+                    Button("好", role: .cancel) { }
+                } message: {
+                    Text(coursewareError ?? "")
                 }
                 .alert("先配置 AI 接口", isPresented: $showSettingsAlert) {
                     Button("知道了", role: .cancel) { }
@@ -87,7 +118,9 @@ struct LiveView: View {
 
     @ViewBuilder
     private var layout: some View {
-        if sizeClass == .compact {
+        if showCourseware, let classroomCourseware {
+            classroomLayout(classroomCourseware)
+        } else if sizeClass == .compact {
             VStack(spacing: 0) {
                 captionColumn
                 Divider().overlay(Color.white.opacity(0.08))
@@ -103,6 +136,110 @@ struct LiveView: View {
         }
     }
 
+    @ViewBuilder
+    private var coursewareControl: some View {
+        if classroomCourseware != nil {
+            Menu {
+                Button(showCourseware ? "隐藏课件" : "显示课件",
+                       systemImage: "rectangle.split.2x1") {
+                    showCourseware.toggle()
+                }
+                Button("更换课件", systemImage: "folder") {
+                    showCoursewareImporter = true
+                }
+                Button("移除本节课件", systemImage: "xmark.circle") {
+                    showCourseware = false
+                    classroomCourseware = nil
+                    coursewarePage = 0
+                }
+            } label: {
+                Label("课件", systemImage: "rectangle.split.2x1")
+            }
+        } else {
+            Button {
+                showCoursewareImporter = true
+            } label: {
+                Label("打开课件", systemImage: "rectangle.split.2x1")
+            }
+        }
+    }
+
+    private func classroomLayout(_ courseware: ClassroomCourseware) -> some View {
+        GeometryReader { geometry in
+            let sideBySide = geometry.size.width >= 740 && geometry.size.width >= geometry.size.height
+            let arrangement = sideBySide ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
+            let width = max(0, geometry.size.width - 1)
+            let height = max(0, geometry.size.height - 1)
+            arrangement {
+                LiveCoursewarePane(document: courseware.document, image: courseware.image,
+                                   fileName: courseware.displayName, pageIndex: $coursewarePage) {
+                    showCoursewareImporter = true
+                }
+                .frame(width: sideBySide ? width * 0.60 : nil,
+                       height: sideBySide ? nil : height * 0.55)
+                Rectangle()
+                    .fill(Color(uiColor: .separator))
+                    .frame(width: sideBySide ? 1 : nil, height: sideBySide ? nil : 1)
+                    .accessibilityHidden(true)
+                VStack(spacing: 0) {
+                    classroomCaptionHeader
+                    Divider()
+                    captionColumn
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(width: sideBySide ? width * 0.40 : nil,
+                       height: sideBySide ? nil : height * 0.45)
+            }
+        }
+    }
+
+    private var classroomCaptionHeader: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("实时双语字幕").font(.subheadline.weight(.semibold))
+                if isRecording, showingLive, !live.status.isEmpty {
+                    Text(live.status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if isRecording || live.isStopping {
+                Text(timeString(elapsed)).font(.subheadline.monospacedDigit())
+            }
+            Button {
+                UIPasteboard.general.string = currentTranscript()
+            } label: {
+                Image(systemName: "doc.on.doc").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("复制双语转写")
+            .disabled(lines.isEmpty)
+        }
+        .padding(.leading, 12)
+    }
+
+    private func importClassroomCourseware(_ result: Result<URL, Error>) {
+        do {
+            let source = try result.get()
+            let name = try store.importFile(from: source)
+            let localURL = store.fileURL(named: name)
+            let document = localURL.pathExtension.lowercased() == "pdf" ? PDFDocument(url: localURL) : nil
+            let image = document == nil ? UIImage(contentsOfFile: localURL.path) : nil
+            guard document.map({ !$0.isLocked && $0.pageCount > 0 }) == true || image != nil else {
+                store.deleteFile(named: name)
+                coursewareError = "这个文件无法预览。请选择能打开的 PDF 或图片。"
+                return
+            }
+            coursewarePage = 0
+            classroomCourseware = ClassroomCourseware(storedName: name, displayName: source.lastPathComponent,
+                                                     document: document, image: image)
+            showCourseware = true
+        } catch {
+            coursewareError = error.localizedDescription
+        }
+    }
+
     private func toggleRecording() {
         guard !live.isStopping else { return }
         if live.isRecording || live.isStarting {
@@ -110,7 +247,8 @@ struct LiveView: View {
             return
         }
         if session.isRecording {
-            let lesson = session.stop()
+            var lesson = session.stop()
+            lesson.coursewareFileName = classroomCourseware?.storedName
             finishedLesson = lesson
             store.save(lesson)
             return
@@ -150,6 +288,7 @@ struct LiveView: View {
                                                 createdAt: lesson.createdAt)
         lesson.sourceLanguage = settings.sourceLanguage
         lesson.targetLanguage = settings.targetLanguage
+        lesson.coursewareFileName = classroomCourseware?.storedName
         if live.errorMessage == nil { finishedLesson = lesson }
         store.save(lesson)
     }
@@ -174,6 +313,9 @@ struct LiveView: View {
                             }
                         }
                         .padding(16)
+                    }
+                    .onAppear {
+                        if let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                     .onChange(of: lines.count) { _, _ in
                         if let last = lines.last {
