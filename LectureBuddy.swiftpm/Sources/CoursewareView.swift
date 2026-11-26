@@ -153,55 +153,94 @@ struct CoursewareView: View {
     }
 
     private func toolbar(lesson: Lesson) -> some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 4) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    annotationTools
+                    Divider().frame(height: 22)
+                    pageControls(lesson: lesson)
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                    annotationTools
+                    pageControls(lesson: lesson)
+                }
+            }
+
+            if tool == .select {
+                Text("单指从题目一角拖到对角，松手即可提问。双指可以移动和缩放课件。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 4)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.25))
+    }
+
+    private var annotationTools: some View {
+        HStack(spacing: 6) {
             Button { tool = .pen } label: { toolIcon("pencil.tip", .pen) }
                 .accessibilityLabel("铅笔")
             Button { tool = .highlighter } label: { toolIcon("highlighter", .highlighter) }
                 .accessibilityLabel("荧光笔")
             Button { tool = .eraser } label: { toolIcon("eraser", .eraser) }
                 .accessibilityLabel("橡皮")
-            Button { tool = .select } label: { toolIcon("lasso", .select) }
-                .accessibilityLabel("圈选提问")
-
-            if tool == .select {
-                // 没 Apple Pencil 也能用：手指直接拖一个框就行
-                Text("用手指或笔拖一个框，松手就讲解")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            Button { tool = .select } label: {
+                Label("圈选提问", systemImage: "lasso")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(tool == .select ? Color.white : Color.primary)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 44)
+                    .background(tool == .select ? Color.indigo : Color.indigo.opacity(0.14),
+                                in: RoundedRectangle(cornerRadius: 8))
             }
+            .accessibilityAddTraits(tool == .select ? .isSelected : [])
+            .disabled(pageImage == nil)
+        }
+    }
 
-            Divider().frame(height: 22)
-
+    private func pageControls(lesson: Lesson) -> some View {
+        HStack(spacing: 6) {
             Button { goTo(pageIndex - 1, lesson: lesson) } label: {
                 Image(systemName: "chevron.left")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel("上一页")
             .disabled(pageIndex <= 0)
 
             Text("\(pageIndex + 1) / \(max(pageCount, 1))")
                 .font(.caption.monospacedDigit())
+                .fixedSize()
 
             Button { goTo(pageIndex + 1, lesson: lesson) } label: {
                 Image(systemName: "chevron.right")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel("下一页")
             .disabled(pageIndex >= pageCount - 1)
 
             Spacer()
 
-            Button("换课件") { showImporter = true }
-                .font(.footnote)
+            Button { showImporter = true } label: {
+                Text("换课件")
+                    .font(.footnote)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.black.opacity(0.25))
     }
 
     private func toolIcon(_ name: String, _ value: PencilCanvasView.CanvasTool) -> some View {
         Image(systemName: name)
             .font(.system(size: 17))
-            .frame(width: 38, height: 34)
+            .frame(width: 44, height: 44)
             .background(tool == value ? Color.indigo.opacity(0.3) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
     }
 }
 
