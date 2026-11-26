@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import PDFKit
 
 struct LessonDetailView: View {
     let lessonID: UUID
@@ -18,11 +19,22 @@ struct LessonDetailView: View {
     @State private var asking = false
     @State private var revealAnswers = false
     @State private var player: AVAudioPlayer?
+    @State private var playerFileName: String?
     @State private var playing = false
+    @State private var playbackRate: Float = 1
+    @State private var activeBookmarkID: UUID?
+    @State private var bookmarkError: String?
     @State private var shareAudioURL: URL?
     @State private var shareError: String?
     @State private var showCourseware = false
+    @State private var coursewarePage = 0
+    @State private var earlierCourseware: EarlierCourseware?
     @State private var showTutorLog = false
+
+    private struct EarlierCourseware {
+        let document: PDFDocument?
+        let image: UIImage?
+    }
 
     private var lesson: Lesson? {
         store.lessons.first { $0.id == lessonID }
@@ -79,6 +91,13 @@ struct LessonDetailView: View {
         } message: {
             Text(shareError ?? "")
         }
+        .alert("无法打开", isPresented: Binding(
+            get: { bookmarkError != nil },
+            set: { if !$0 { bookmarkError = nil } })) {
+            Button("好") { bookmarkError = nil }
+        } message: {
+            Text(bookmarkError ?? "")
+        }
         .sheet(item: Binding(
             get: { shareAudioURL.map(ShareFile.init) },
             set: { if $0 == nil { shareAudioURL = nil } })) { file in
@@ -86,7 +105,19 @@ struct LessonDetailView: View {
         }
         .fullScreenCover(isPresented: $showCourseware) {
             NavigationStack {
-                CoursewareView(lessonID: lessonID)
+                if let earlierCourseware {
+                    LiveCoursewarePane(document: earlierCourseware.document, image: earlierCourseware.image,
+                                       fileName: "标记时的课件", pageIndex: $coursewarePage)
+                        .navigationTitle("标记时的课件")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("关闭") { showCourseware = false }
+                            }
+                        }
+                } else {
+                    CoursewareView(lessonID: lessonID, initialPage: coursewarePage)
+                }
             }
         }
         .sheet(isPresented: $showTutorLog) {
@@ -109,10 +140,31 @@ struct LessonDetailView: View {
             guard lesson.notes == nil, !lesson.lines.isEmpty, settings.hasAIConfiguration else { return }
             await generate(for: lesson)
         }
+        .task(id: playing) {
+            guard playing else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(200)) }
+                catch { return }
+                guard player?.isPlaying == true else {
+                    playing = false
+                    activeBookmarkID = nil
+                    return
+                }
+            }
+        }
     }
     private func menu(for lesson: Lesson) -> some View {
         Menu {
+            if !lesson.bookmarks.isEmpty {
+                Button {
+                    tab = 1
+                } label: {
+                    Label("课堂书签（\(lesson.bookmarks.count)）", systemImage: "bookmark")
+                }
+            }
             Button {
+                earlierCourseware = nil
+                coursewarePage = 0
                 showCourseware = true
             } label: {
                 Label(lesson.coursewareFileName == nil ? "导入课件" : "打开课件",
@@ -399,18 +451,27 @@ struct LessonDetailView: View {
             if let name = lesson.audioFileName {
                 HStack(spacing: 12) {
                     Button {
-                        toggleAudio(lesson: lesson, name: name)
+                        toggleAudio(named: name)
                     } label: {
                         Image(systemName: playing ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 34))
                             .foregroundStyle(.indigo)
                     }
+                    .accessibilityLabel(playing ? "暂停录音" : "播放录音")
                     VStack(alignment: .leading, spacing: 2) {
                         Text(playing ? "正在回放课堂录音" : "回放课堂录音").font(.subheadline)
                         Text(timeString(lesson.duration))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Menu {
+                        Button("正常速度") { setPlaybackRate(1) }
+                        Button("慢速播放 · 0.75×") { setPlaybackRate(0.75) }
+                    } label: {
+                        Text(playbackRate == 1 ? "1×" : "0.75×")
+                            .font(.subheadline.monospacedDigit())
+                    }
+                    .accessibilityLabel("播放速度")
                     // 录音能直接导出去：发给同学、归档、或换机前存一份
                     Button {
                         shareAudio(named: name)
@@ -425,6 +486,9 @@ struct LessonDetailView: View {
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    if !lesson.bookmarks.isEmpty {
+                        bookmarkSection(lesson)
+                    }
                     ForEach(lesson.lines) { line in
                         transcriptRow(line)
                     }
@@ -432,6 +496,95 @@ struct LessonDetailView: View {
                 .padding(20)
             }
         }
+    }
+
+    private func bookmarkSection(_ lesson: Lesson) -> some View {
+        let captionsByID = Dictionary(lesson.lines.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        return Section {
+            ForEach(lesson.bookmarks) { bookmark in
+                bookmarkRow(bookmark, caption: bookmark.captionID.flatMap { captionsByID[$0] }, lesson: lesson)
+            }
+            if lesson.audioFileName == nil {
+                Text("这节课没有录音，可以查看保存的字幕和课件。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("课堂书签").font(.headline)
+        }
+    }
+
+    private func bookmarkRow(_ bookmark: LessonBookmark, caption: CaptionLine?, lesson: Lesson) -> some View {
+        let source = caption?.text ?? bookmark.sourceText
+        let translation = caption?.translation ?? bookmark.translation
+        let isPlayingBookmark = playing && activeBookmarkID == bookmark.id
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(bookmark.kind.title, systemImage: bookmark.kind.symbol)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(bookmark.kind == .question ? Color.orange : Color.indigo)
+                Spacer()
+                Text(timeString(bookmark.offset))
+                    .font(.footnote.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if let source, !source.isEmpty, source != translation {
+                Text(source).font(.footnote).foregroundStyle(.secondary)
+            }
+            if let translation, !translation.isEmpty {
+                Text(translation).font(.subheadline)
+            }
+            HStack(spacing: 8) {
+                if let name = lesson.audioFileName {
+                    Button(isPlayingBookmark ? "暂停" : "回听", systemImage: isPlayingBookmark ? "pause.fill" : "play.fill") {
+                        if isPlayingBookmark {
+                            player?.pause()
+                            playing = false
+                        } else {
+                            playAudio(named: name, from: bookmark.replayOffset, bookmarkID: bookmark.id)
+                        }
+                    }
+                }
+                if let page = bookmark.pageIndex, page >= 0, page < Int.max,
+                   let name = bookmark.coursewareFileName {
+                    Button("第 \(page + 1) 页", systemImage: "doc") {
+                        openBookmarkCourseware(named: name, page: page, lesson: lesson)
+                    }
+                }
+            }
+            .font(.footnote)
+            .buttonStyle(.bordered)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func openBookmarkCourseware(named name: String, page: Int, lesson: Lesson) {
+        guard isLocalRecordingOrCoursewareName(name) else {
+            bookmarkError = "标记时的课件文件名无效。"
+            return
+        }
+        let url = store.fileURL(named: name)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            bookmarkError = "标记时的课件文件不在这台设备上。"
+            return
+        }
+        if lesson.coursewareFileName == name {
+            earlierCourseware = nil
+            coursewarePage = page
+        } else if url.pathExtension.lowercased() == "pdf",
+                  let document = PDFDocument(url: url), !document.isLocked, document.pageCount > 0 {
+            earlierCourseware = EarlierCourseware(document: document, image: nil)
+            coursewarePage = min(page, document.pageCount - 1)
+        } else if let image = UIImage(contentsOfFile: url.path) {
+            earlierCourseware = EarlierCourseware(document: nil, image: image)
+            coursewarePage = 0
+        } else {
+            bookmarkError = "标记时的课件打不开，文件可能已损坏。"
+            return
+        }
+        showCourseware = true
     }
 
     private func transcriptRow(_ line: CaptionLine) -> some View {
@@ -454,20 +607,55 @@ struct LessonDetailView: View {
         }
     }
 
-    private func toggleAudio(lesson: Lesson, name: String) {
+    private func setPlaybackRate(_ rate: Float) {
+        playbackRate = rate
+        player?.rate = rate
+    }
+
+    private func toggleAudio(named name: String) {
         if playing {
             player?.pause()
             playing = false
             return
         }
-        if player == nil {
-            let url = store.audioURL(named: name)
-            guard FileManager.default.fileExists(atPath: url.path) else { return }
-            player = try? AVAudioPlayer(contentsOf: url)
-            player?.prepareToPlay()
+        playAudio(named: name)
+    }
+
+    private func playAudio(named name: String, from offset: TimeInterval? = nil, bookmarkID: UUID? = nil) {
+        guard isLocalRecordingOrCoursewareName(name) else {
+            bookmarkError = "录音文件名无效。"
+            return
         }
-        player?.play()
-        playing = true
+        do {
+            if player == nil || playerFileName != name {
+                player?.stop()
+                playing = false
+                let newPlayer = try AVAudioPlayer(contentsOf: store.audioURL(named: name))
+                newPlayer.enableRate = true
+                newPlayer.prepareToPlay()
+                player = newPlayer
+                playerFileName = name
+            }
+            guard let player else { return }
+            player.rate = playbackRate
+            if let offset {
+                player.currentTime = min(max(0, offset), max(0, player.duration - 0.1))
+            } else if player.currentTime >= player.duration {
+                player.currentTime = 0
+            }
+            playing = player.play()
+            activeBookmarkID = playing ? bookmarkID : nil
+            if !playing { bookmarkError = "录音无法播放，可以试着导出后打开。" }
+        } catch {
+            playing = false
+            activeBookmarkID = nil
+            bookmarkError = "录音文件找不到或无法读取。"
+        }
+    }
+
+    private func isLocalRecordingOrCoursewareName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".."
+            && !name.contains("/") && !name.contains("\\") && !name.contains("\0")
     }
     // MARK: - 练习
 

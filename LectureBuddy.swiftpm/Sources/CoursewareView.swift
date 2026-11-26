@@ -12,6 +12,12 @@ import UIKit
 ///   这样日常提问几乎不花钱，只有真需要看图时才付那份成本。
 struct CoursewareView: View {
     let lessonID: UUID
+    private let initialPage: Int
+
+    init(lessonID: UUID, initialPage: Int = 0) {
+        self.lessonID = lessonID
+        self.initialPage = initialPage
+    }
 
     @EnvironmentObject var store: LessonStore
     @EnvironmentObject var settings: AppSettings
@@ -141,7 +147,9 @@ struct CoursewareView: View {
                 }
             }
         }
-        .onAppear { loadDocument(fileName: fileName, lesson: lesson) }
+        .onAppear {
+            if pageImage == nil { loadDocument(fileName: fileName, lesson: lesson, page: initialPage) }
+        }
     }
 
     private func toolbar(lesson: Lesson) -> some View {
@@ -201,7 +209,7 @@ struct CoursewareView: View {
 
 extension CoursewareView {
 
-    private func loadDocument(fileName: String, lesson: Lesson) {
+    private func loadDocument(fileName: String, lesson: Lesson, page: Int = 0) {
         // 换课件时不能把旧画布写到新课件；恢复完成后才允许保存。
         drawingIsLoaded = false
         let url = store.fileURL(named: fileName)
@@ -216,7 +224,7 @@ extension CoursewareView {
             }
             pdfDocument = doc
             pageCount = doc.pageCount
-            goTo(0, lesson: lesson)
+            goTo(page, lesson: lesson)
         } else if let image = UIImage(contentsOfFile: url.path) {
             pdfDocument = nil
             pageCount = 1

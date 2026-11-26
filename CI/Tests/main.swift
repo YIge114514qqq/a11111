@@ -190,6 +190,24 @@ do {
     expect(stream.lines.map(\.translation) == ["今天不布置作业。"], "late association preserves final translation")
 }
 
+do {
+    let oldLesson = try JSONDecoder().decode(Lesson.self, from: Data("{}".utf8))
+    expect(oldLesson.bookmarks.isEmpty, "older lessons without bookmarks decode")
+    let sparseBookmark = try JSONDecoder().decode(LessonBookmark.self, from: Data("{}".utf8))
+    expect(sparseBookmark.kind == .question && sparseBookmark.replayOffset == 0,
+           "missing bookmark fields decode and replay stays within recording")
+    let caption = CaptionLine(text: "과제", translation: "作业", offset: 33)
+    let marker = LessonBookmark(kind: .important, offset: 35, caption: caption,
+                                coursewareFileName: "slides.pdf", pageIndex: 4)
+    var lesson = Lesson(title: "韩语课")
+    lesson.bookmarks = [marker]
+    let restored = try JSONDecoder().decode(Lesson.self, from: JSONEncoder().encode(lesson))
+    expect(restored.bookmarks == [marker], "lesson backup round-trips caption and page association")
+    expect(restored.bookmarks.first?.replayOffset == 30, "replay starts five seconds before the bookmark")
+} catch {
+    fatalError("FAIL: lesson bookmark coding: \(error)")
+}
+
 print("PASS: \(checks) model checks")
 
 runTutorTests()

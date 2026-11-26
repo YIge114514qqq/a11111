@@ -8,7 +8,7 @@ struct LiveCoursewarePane: View {
     let image: UIImage?
     let fileName: String
     @Binding var pageIndex: Int
-    let onReplace: () -> Void
+    var onReplace: (() -> Void)? = nil
 
     private var pageCount: Int { document?.pageCount ?? (image == nil ? 0 : 1) }
 
@@ -20,11 +20,13 @@ struct LiveCoursewarePane: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
-                Button(action: onReplace) {
-                    Image(systemName: "folder")
-                        .frame(width: 44, height: 44)
+                if let onReplace {
+                    Button(action: onReplace) {
+                        Image(systemName: "folder")
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("更换课件")
                 }
-                .accessibilityLabel("更换课件")
             }
             .padding(.leading, 12)
 

@@ -88,6 +88,10 @@ final class LiveSession: NSObject, ObservableObject {
     @Published var isTranslating = false
     @Published var translationError: String?
 
+    var bookmarkOffset: TimeInterval {
+        startedAt.map { max(0, Date().timeIntervalSince($0)) } ?? elapsed
+    }
+
     private let pump = AudioPump()
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognizer: SFSpeechRecognizer?
@@ -220,7 +224,7 @@ final class LiveSession: NSObject, ObservableObject {
     }
 
     func stop() -> Lesson {
-        let lessonElapsed = elapsed
+        let lessonElapsed = bookmarkOffset
         let captured = lines
         stopEverything()
         return Lesson(

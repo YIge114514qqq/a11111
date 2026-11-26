@@ -36,6 +36,9 @@ struct LiveView: View {
     @State private var finishedLesson: Lesson?
     @State private var showLarge = false
     @State private var savedLiveSessionID: UUID?
+    @State private var classroomBookmarks: [LessonBookmark] = []
+    @State private var startingLesson = false
+    @State private var captionScroll = CaptionScrollState()
     @State private var classroomCourseware: ClassroomCourseware?
     @State private var showCourseware = false
     @State private var showCoursewareImporter = false
@@ -123,12 +126,16 @@ struct LiveView: View {
         } else if sizeClass == .compact {
             VStack(spacing: 0) {
                 captionColumn
+                if canBookmark { bookmarkControls }
                 Divider().overlay(Color.white.opacity(0.08))
                 controlColumn(compact: true)
             }
         } else {
             HStack(spacing: 0) {
-                captionColumn
+                VStack(spacing: 0) {
+                    captionColumn
+                    if canBookmark { bookmarkControls }
+                }
                 Divider().overlay(Color.white.opacity(0.08))
                 controlColumn(compact: false)
                     .frame(width: 320)
@@ -185,6 +192,7 @@ struct LiveView: View {
                     classroomCaptionHeader
                     Divider()
                     captionColumn
+                    if canBookmark { bookmarkControls }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(width: sideBySide ? width * 0.40 : nil,
@@ -249,18 +257,27 @@ struct LiveView: View {
         if session.isRecording {
             var lesson = session.stop()
             lesson.coursewareFileName = classroomCourseware?.storedName
+            lesson.bookmarks = classroomBookmarks
             finishedLesson = lesson
             store.save(lesson)
             return
         }
+        guard !startingLesson else { return }
         guard settings.isConfigured else {
             showSettingsAlert = true
             return
         }
-        if settings.useLiveTranslate {
-            Task { await live.start() }
-        } else {
-            Task { await session.start(settings: settings) }
+        captionScroll = CaptionScrollState()
+        classroomBookmarks = []
+        startingLesson = true
+        let useLive = settings.useLiveTranslate
+        Task {
+            defer { startingLesson = false }
+            if useLive {
+                await live.start()
+            } else {
+                await session.start(settings: settings)
+            }
         }
     }
 
@@ -277,18 +294,19 @@ struct LiveView: View {
             }
             return size > 44
         } ?? false
-        guard !completion.lines.isEmpty || hasAudio else { return }
+        guard !completion.lines.isEmpty || hasAudio || !classroomBookmarks.isEmpty else { return }
         var lesson = Lesson(
             title: defaultLessonTitle(),
             duration: completion.duration,
             lines: completion.lines
         )
-        lesson.audioFileName = store.renameAudio(named: completion.audioFileName,
+        lesson.audioFileName = store.renameAudio(named: hasAudio ? completion.audioFileName : nil,
                                                 lessonTitle: lesson.title,
                                                 createdAt: lesson.createdAt)
         lesson.sourceLanguage = settings.sourceLanguage
         lesson.targetLanguage = settings.targetLanguage
         lesson.coursewareFileName = classroomCourseware?.storedName
+        lesson.bookmarks = classroomBookmarks
         if live.errorMessage == nil { finishedLesson = lesson }
         store.save(lesson)
     }
@@ -299,31 +317,47 @@ struct LiveView: View {
         fmt.dateFormat = "M月d日 HH:mm 的课"
         return fmt.string(from: Date())
     }
+
+    private var canBookmark: Bool { live.isRecording || session.isRecording }
+
+    private func bookmarkCurrentMoment(_ kind: LessonBookmark.Kind) {
+        guard canBookmark else { return }
+        let offset = showingLive ? live.bookmarkOffset : session.bookmarkOffset
+        let caption = lines.last.flatMap { line in
+            abs(offset - line.offset) <= 15 ? line : nil
+        }
+        let courseware = showCourseware ? classroomCourseware : nil
+        classroomBookmarks.append(LessonBookmark(kind: kind, offset: offset, caption: caption,
+                                                  coursewareFileName: courseware?.storedName,
+                                                  pageIndex: courseware == nil ? nil : coursewarePage))
+    }
+
+    private var bookmarkControls: some View {
+        HStack(spacing: 8) {
+            Button { bookmarkCurrentMoment(.question) } label: {
+                Label("没听懂", systemImage: "questionmark.circle")
+            }
+            Button { bookmarkCurrentMoment(.important) } label: {
+                Label("重点", systemImage: "bookmark")
+            }
+            Spacer(minLength: 0)
+            if !classroomBookmarks.isEmpty {
+                Text("已标记 \(classroomBookmarks.count)")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.footnote)
+        .buttonStyle(.bordered)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
     private var captionColumn: some View {
         VStack(spacing: 0) {
             if lines.isEmpty {
                 emptyState
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 10) {
-                            ForEach(lines) { line in
-                                CaptionText(line: line)
-                                    .id(line.id)
-                            }
-                        }
-                        .padding(16)
-                    }
-                    .onAppear {
-                        if let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                    .onChange(of: lines.count) { _, _ in
-                        if let last = lines.last {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
-                    }
+                CaptionScrollPane(lines: lines, scroll: $captionScroll, spacing: 10, padding: 16) { line in
+                    CaptionText(line: line)
                 }
             }
 
@@ -515,38 +549,122 @@ struct LiveView: View {
         .background(color.opacity(0.12))
     }
 }
+private struct CaptionScrollState {
+    var pausedAt: Set<UUID>?
+    var visibleID: UUID?
+}
+
+private struct CaptionScrollPane<Row: View>: View {
+    let lines: [CaptionLine]
+    @Binding var scroll: CaptionScrollState
+    let spacing: CGFloat
+    let padding: CGFloat
+    @ViewBuilder let row: (CaptionLine) -> Row
+
+    @State private var visibleID: UUID?
+
+    private var buttonTitle: String {
+        guard let presentAtPause = scroll.pausedAt else { return "暂停滚动" }
+        let count = lines.reduce(into: 0) { count, line in
+            if !presentAtPause.contains(line.id) { count += 1 }
+        }
+        return count == 0 ? "回到实时" : "回到实时 · \(count) 条新字幕"
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: spacing) {
+                        ForEach(lines) { line in
+                            row(line).id(line.id)
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(padding)
+                }
+                .scrollPosition(id: $visibleID, anchor: .top)
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 12)
+                        .onChanged { drag in
+                            if abs(drag.translation.height) > abs(drag.translation.width) {
+                                pauseFollowing()
+                            }
+                        }
+                )
+                .onAppear {
+                    if scroll.pausedAt != nil, let id = scroll.visibleID, lines.contains(where: { $0.id == id }) {
+                        proxy.scrollTo(id, anchor: .top)
+                    } else if let last = lines.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+                .onChange(of: lines.last) { previous, last in
+                    guard scroll.pausedAt == nil, let last else { return }
+                    if last.id != previous?.id {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    } else {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+                .onChange(of: visibleID) { _, id in
+                    if scroll.pausedAt != nil, let id {
+                        scroll.visibleID = id
+                    }
+                }
+
+                Divider()
+                Button {
+                    if scroll.pausedAt == nil {
+                        pauseFollowing()
+                    } else {
+                        scroll = CaptionScrollState()
+                        if let last = lines.last {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(buttonTitle, systemImage: scroll.pausedAt == nil ? "pause.circle" : "arrow.down.to.line")
+                        .font(.footnote.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(scroll.pausedAt == nil ? Color.secondary : Color.indigo)
+            }
+        }
+    }
+
+    private func pauseFollowing() {
+        guard scroll.pausedAt == nil else { return }
+        scroll = CaptionScrollState(pausedAt: Set(lines.map(\.id)), visibleID: visibleID)
+    }
+}
+
 /// 全屏大字幕：把 iPad 架在桌上，抬头就能看
 struct LargeCaptionView: View {
     let lines: [CaptionLine]
     @Environment(\.dismiss) private var dismiss
+    @State private var scroll = CaptionScrollState()
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ForEach(lines.suffix(40)) { line in
-                            VStack(alignment: .leading, spacing: 6) {
-                                if let t = line.translation, !t.isEmpty {
-                                    Text(t)
-                                        .font(.system(size: 40, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                }
-                                Text(line.text)
-                                    .font(.system(size: 22))
-                                    .foregroundStyle(.white.opacity(0.55))
-                            }
-                            .id(line.id)
-                        }
+            CaptionScrollPane(lines: lines, scroll: $scroll, spacing: 18, padding: 28) { line in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let t = line.translation, !t.isEmpty {
+                        Text(t)
+                            .font(.system(size: 40, weight: .semibold))
+                            .foregroundStyle(.white)
                     }
-                    .padding(28)
+                    Text(line.text)
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white.opacity(0.55))
                 }
-                .onChange(of: lines.count) { _, _ in
-                        if let last = lines.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                        }
-                    }
             }
             Button {
                 dismiss()

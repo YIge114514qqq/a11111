@@ -54,6 +54,9 @@ final class LiveTranslateSession: ObservableObject {
     /// 本次已采集到的音频字节数（自检用：为 0 就说明麦克风根本没出声）
     @Published var audioBytes = 0
 
+    // 16 kHz、16 位单声道。用已采集的 PCM 长度对齐本地 WAV。
+    var bookmarkOffset: TimeInterval { Double(audioBytes) / 32_000 }
+
     private var captionStream = LiveCaptionStream()
 
     private let defaults = UserDefaults.standard

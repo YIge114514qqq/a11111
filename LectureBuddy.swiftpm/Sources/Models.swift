@@ -430,6 +430,66 @@ struct LessonNotes: Codable, Hashable {
     }
 }
 
+struct LessonBookmark: Identifiable, Codable, Hashable {
+    enum Kind: String {
+        case question, important
+
+        var title: String { self == .question ? "没听懂" : "重点" }
+        var symbol: String { self == .question ? "questionmark.circle" : "bookmark" }
+    }
+
+    var id = UUID()
+    var kind: Kind
+    var offset: TimeInterval
+    var captionID: UUID?
+    var sourceText: String?
+    var translation: String?
+    var coursewareFileName: String?
+    var pageIndex: Int?
+
+    var replayOffset: TimeInterval { max(0, offset - 5) }
+
+    init(kind: Kind, offset: TimeInterval, caption: CaptionLine? = nil,
+         coursewareFileName: String? = nil, pageIndex: Int? = nil) {
+        self.kind = kind
+        self.offset = max(0, offset)
+        captionID = caption?.id
+        sourceText = caption?.text
+        translation = caption?.translation
+        self.coursewareFileName = coursewareFileName
+        self.pageIndex = pageIndex
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        let rawKind = try c.decodeIfPresent(String.self, forKey: .kind)
+        kind = rawKind.flatMap(Kind.init(rawValue:)) ?? .question
+        offset = max(0, try c.decodeIfPresent(TimeInterval.self, forKey: .offset) ?? 0)
+        captionID = try c.decodeIfPresent(UUID.self, forKey: .captionID)
+        sourceText = try c.decodeIfPresent(String.self, forKey: .sourceText)
+        translation = try c.decodeIfPresent(String.self, forKey: .translation)
+        coursewareFileName = try c.decodeIfPresent(String.self, forKey: .coursewareFileName)
+        pageIndex = try c.decodeIfPresent(Int.self, forKey: .pageIndex)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind.rawValue, forKey: .kind)
+        try c.encode(offset, forKey: .offset)
+        try c.encodeIfPresent(captionID, forKey: .captionID)
+        try c.encodeIfPresent(sourceText, forKey: .sourceText)
+        try c.encodeIfPresent(translation, forKey: .translation)
+        try c.encodeIfPresent(coursewareFileName, forKey: .coursewareFileName)
+        try c.encodeIfPresent(pageIndex, forKey: .pageIndex)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, offset, captionID, sourceText, translation, coursewareFileName, pageIndex
+    }
+}
+
 struct Lesson: Identifiable, Codable, Hashable {
     var id: UUID = UUID()
     var title: String
@@ -446,6 +506,7 @@ struct Lesson: Identifiable, Codable, Hashable {
     var annotations: [Data] = []
     /// 圈选提问的历史：截图 + 讲解，复习时能回看
     var tutorLog: [TutorEntry] = []
+    var bookmarks: [LessonBookmark] = []
 
     /// 和 LessonNotes 一样宽容解码：旧文件里若缺 id/createdAt 等字段，
     /// 不能因为一个字段就整库解不出来（那才是升级后课程全没的原因）。
@@ -464,6 +525,7 @@ struct Lesson: Identifiable, Codable, Hashable {
         coursewareFileName = try c.decodeIfPresent(String.self, forKey: .coursewareFileName)
         annotations = try c.decodeIfPresent([Data].self, forKey: .annotations) ?? []
         tutorLog = try c.decodeIfPresent([TutorEntry].self, forKey: .tutorLog) ?? []
+        bookmarks = try c.decodeIfPresent([LessonBookmark].self, forKey: .bookmarks) ?? []
     }
 
     init() {
