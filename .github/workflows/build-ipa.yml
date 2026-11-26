@@ -94,6 +94,26 @@ jobs:
           awk '$1 ~ /^[0-9]+$/ && /com\.lecturebuddy\.app/ { found=1 } END { exit !found }' /tmp/app-processes.txt \
             || { echo "ERROR: App 进程已退出"; exit 1; }
 
+      - name: Test iPhone courseware selection
+        timeout-minutes: 7
+        run: |
+          set -euo pipefail
+          DEV=$(xcrun simctl list devices available | grep -m1 'iPhone 16 Pro Max' | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          xcrun simctl terminate "$DEV" com.lecturebuddy.app
+          DATA=$(xcrun simctl get_app_container "$DEV" com.lecturebuddy.app data)
+          mkdir -p "$DATA/Documents"
+          printf '%s\n' '[{"title":"圈选回归课程","coursewareFileName":"courseware-test.png"}]' > "$DATA/Documents/lessons.json"
+          # A tiny white PNG is enough to exercise dragging and the crop preview, with no API key.
+          printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAQSURBVBhXY/iPBkgW+P8fAHg8P8Hpkr/2AAAAAElFTkSuQmCC' \
+            | base64 -D > "$DATA/Documents/courseware-test.png"
+
+          xcodebuild test \
+            -project LectureBuddy.xcodeproj \
+            -scheme LectureBuddyCoursewareUITests \
+            -destination "platform=iOS Simulator,id=$DEV" \
+            -parallel-testing-enabled NO
+          echo 'PASS: iPhone courseware selection UI check'
+
       - name: Smoke test - debug autostart and process survival
         run: |
           set -euxo pipefail

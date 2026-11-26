@@ -29,3 +29,26 @@ targets:
         GENERATE_INFOPLIST_FILE: "NO"
         INFOPLIST_FILE: CI/Info.plist
         CODE_SIGN_STYLE: Automatic
+
+  LectureBuddyCoursewareUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: CI/Tests/CoursewareSelectionUITests.swift
+    dependencies:
+      - target: LectureBuddy
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: LectureBuddy
+
+schemes:
+  LectureBuddyCoursewareUITests:
+    build:
+      targets:
+        LectureBuddy: [test]
+        LectureBuddyCoursewareUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - LectureBuddyCoursewareUITests

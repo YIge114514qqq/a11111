@@ -58,10 +58,9 @@ struct PencilCanvasView: UIViewRepresentable {
         context.coordinator.container = container
         context.coordinator.imageView = imageView
         context.coordinator.canvas = canvas
-        context.coordinator.scrollView = scroll
         context.coordinator.installToolPicker(for: canvas)
-        context.coordinator.installSelectionGesture(on: scroll)
-        context.coordinator.apply(tool: tool, to: canvas)
+        context.coordinator.installSelectionSurface(in: container, scroll: scroll)
+        context.coordinator.apply(tool: tool)
 
         // 把句柄给出去，外部通过它读写笔画
         DispatchQueue.main.async {
@@ -73,7 +72,7 @@ struct PencilCanvasView: UIViewRepresentable {
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onSelection = onSelection
-        coordinator.apply(tool: tool, to: coordinator.canvas)
+        coordinator.apply(tool: tool)
         if coordinator.imageView?.image !== pageImage {
             coordinator.clearSelection()
             coordinator.imageView?.image = pageImage
@@ -92,7 +91,7 @@ struct PencilCanvasView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(tool: tool, onSelection: onSelection)
+        Coordinator(onSelection: onSelection)
     }
 
     final class Coordinator: NSObject, UIScrollViewDelegate {
@@ -100,18 +99,15 @@ struct PencilCanvasView: UIViewRepresentable {
         var imageView: UIImageView?
         var canvas: PKCanvasView?
         var onSelection: ((CGRect) -> Void)?
-        weak var scrollView: UIScrollView?
-        private var tool: CanvasTool
+        private var tool: CanvasTool?
         private var toolPicker: PKToolPicker?
-        private weak var selectionGesture: UIPanGestureRecognizer?
-        private var normalPanTouchCount = 1
+        private weak var selectionSurface: UIView?
 
         /// 手指拖出来的选择框。没有 Apple Pencil 时全靠它。
         private var selectionLayer: CAShapeLayer?
         private var dragStart: CGPoint?
 
-        init(tool: CanvasTool, onSelection: ((CGRect) -> Void)?) {
-            self.tool = tool
+        init(onSelection: ((CGRect) -> Void)?) {
             self.onSelection = onSelection
         }
 
@@ -129,17 +125,11 @@ struct PencilCanvasView: UIViewRepresentable {
             toolPicker = picker
         }
 
-        func apply(tool: CanvasTool, to canvas: PKCanvasView?) {
-            guard let canvas else { return }
-            if self.tool != tool {
-                dragStart = nil
-                clearSelection()
-            }
+        func apply(tool: CanvasTool) {
+            guard let canvas, self.tool != tool else { return }
+            clearSelection()
             self.tool = tool
-            let isSelecting = tool == .select
-            canvas.isUserInteractionEnabled = !isSelecting
-            selectionGesture?.isEnabled = isSelecting
-            scrollView?.panGestureRecognizer.minimumNumberOfTouches = isSelecting ? 2 : normalPanTouchCount
+            selectionSurface?.isHidden = tool != .select
             switch tool {
             case .pen:
                 canvas.drawingPolicy = .anyInput
@@ -158,16 +148,24 @@ struct PencilCanvasView: UIViewRepresentable {
 
         // MARK: - 手指圈选
 
-        func installSelectionGesture(on scroll: UIScrollView) {
-            normalPanTouchCount = scroll.panGestureRecognizer.minimumNumberOfTouches
+        func installSelectionSurface(in container: UIView, scroll: UIScrollView) {
+            // 圈选层和课件一起缩放。切换工具只显示或隐藏这一层，
+            // PencilKit 保持第一响应者，外层滚动手势也不需要反复重配。
+            let surface = UIView(frame: container.bounds)
+            surface.backgroundColor = .clear
+            surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            surface.isHidden = true
+            container.addSubview(surface)
+
             let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
             pan.minimumNumberOfTouches = 1
             pan.maximumNumberOfTouches = 1
             pan.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue),
                                      NSNumber(value: UITouch.TouchType.pencil.rawValue)]
-            pan.delegate = self
-            scroll.addGestureRecognizer(pan)
-            selectionGesture = pan
+            surface.addGestureRecognizer(pan)
+            // 单指在圈选层上拖动时优先选题。双指时这一手势失败，交给滚动容器。
+            scroll.panGestureRecognizer.require(toFail: pan)
+            selectionSurface = surface
         }
 
         @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
@@ -201,7 +199,6 @@ struct PencilCanvasView: UIViewRepresentable {
                 onSelection?(rect.insetBy(dx: -6, dy: -6).intersection(container.bounds))
 
             case .cancelled, .failed:
-                dragStart = nil
                 clearSelection()
 
             default:
@@ -238,12 +235,6 @@ struct PencilCanvasView: UIViewRepresentable {
             selectionLayer?.removeFromSuperlayer()
             selectionLayer = nil
         }
-    }
-}
-
-extension PencilCanvasView.Coordinator: UIGestureRecognizerDelegate {
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        tool == .select && gestureRecognizer.numberOfTouches == 1
     }
 }
 
