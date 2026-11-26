@@ -203,6 +203,8 @@ struct LessonDetailView: View {
         } label: {
             Image(systemName: "ellipsis.circle")
         }
+        .accessibilityLabel("更多课程操作")
+        .accessibilityIdentifier("lesson-more-actions")
     }
 
     // MARK: - 笔记

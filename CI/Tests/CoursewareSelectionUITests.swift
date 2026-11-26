@@ -16,11 +16,8 @@ final class CoursewareSelectionUITests: XCTestCase {
         XCTAssertTrue(lesson.waitForExistence(timeout: 10))
         lesson.tap()
 
-        let detailBar = app.navigationBars["圈选回归课程"]
-        XCTAssertTrue(detailBar.waitForExistence(timeout: 10))
-        // The menu's system image label varies by iOS version.
-        let menu = try XCTUnwrap(detailBar.buttons.allElementsBoundByIndex.filter(\.isHittable)
-            .max { $0.frame.midX < $1.frame.midX })
+        let menu = app.buttons["lesson-more-actions"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
         menu.tap()
         let openCourseware = app.buttons["打开课件"]
         XCTAssertTrue(openCourseware.waitForExistence(timeout: 10))
